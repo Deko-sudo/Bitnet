@@ -60,11 +60,10 @@ uvicorn backend.api.main:app --reload
 - **architecture.drawio** — архитектурная диаграмма
 
 ## 👥 Команда
-
-- **Никита (BE1)** — Криптография, безопасность, архитектура
-- **Алексей (BE2)** — База данных, CRUD, API
+- **Deko-sudo — Team Lead** / Архитектор системы
+- **tobishmit26 (BE1)** — Криптография, безопасность, архитектура
+- **alexmotu (BE2)** — База данных, CRUD, API
 
 ## 📄 Лицензия
 
-MIT License
-
+Apache License 2.0
