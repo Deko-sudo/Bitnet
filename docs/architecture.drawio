@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-03-08T00:00:00.000Z" version="21.0.0">
+  <diagram name="Architecture" id="arch-main">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        
+        <!-- User -->
+        <mxCell id="user" value="User" style="shape=actor;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="50" y="350" width="80" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Frontend -->
+        <mxCell id="frontend" value="Frontend (Telegram Web App)&lt;br&gt;&lt;b&gt;React/JS&lt;/b&gt;&lt;br&gt;- UI components&lt;br&gt;- Form validation&lt;br&gt;- localStorage cache" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="200" y="330" width="180" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- Backend API -->
+        <mxCell id="backend" value="Backend API&lt;br&gt;&lt;b&gt;Python FastAPI&lt;/b&gt;&lt;br&gt;- REST endpoints&lt;br&gt;- Authentication&lt;br&gt;- Rate limiting&lt;br&gt;- Input validation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="450" y="330" width="180" height="140" as="geometry" />
+        </mxCell>
+        
+        <!-- Crypto Core -->
+        <mxCell id="crypto" value="&lt;b&gt;Crypto Core&lt;/b&gt;&lt;br&gt;(security layer)&lt;br&gt;- AES-256-GCM&lt;br&gt;- Argon2id&lt;br&gt;- HMAC-SHA256&lt;br&gt;- Key management" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="700" y="330" width="160" height="140" as="geometry" />
+        </mxCell>
+        
+        <!-- Auth Manager -->
+        <mxCell id="auth" value="&lt;b&gt;Auth Manager&lt;/b&gt;&lt;br&gt;- Master password&lt;br&gt;- Session keys&lt;br&gt;- Auto-lock timer&lt;br&gt;- Rate limiter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="700" y="500" width="160" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- Database -->
+        <mxCell id="database" value="&lt;b&gt;SQLite Database&lt;/b&gt;&lt;br&gt;&lt;i&gt;(SQLCipher encrypted)&lt;/i&gt;&lt;br&gt;- Users table&lt;br&gt;- Entries table&lt;br&gt;- Audit log&lt;br&gt;- Sessions" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="450" y="520" width="120" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Audit Logger -->
+        <mxCell id="audit" value="&lt;b&gt;Audit Logger&lt;/b&gt;&lt;br&gt;(SQLAlchemy)&lt;br&gt;- Login events&lt;br&gt;- CRUD operations&lt;br&gt;- Security events&lt;br&gt;- No sensitive data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="700" y="650" width="160" height="110" as="geometry" />
+        </mxCell>
+        
+        <!-- Encryption Helper -->
+        <mxCell id="helper" value="&lt;b&gt;Encryption Helper&lt;/b&gt;&lt;br&gt;(for CRUD)&lt;br&gt;- encrypt_entry_fields()&lt;br&gt;- decrypt_entry_fields()&lt;br&gt;- Custom fields JSON" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="900" y="380" width="170" height="110" as="geometry" />
+        </mxCell>
+        
+        <!-- Arrows -->
+        <mxCell id="arrow1" value="HTTPS" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="user" target="frontend" />
+        <mxCell id="arrow2" value="REST API" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="frontend" target="backend" />
+        <mxCell id="arrow3" value="Calls" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="backend" target="crypto" />
+        <mxCell id="arrow4" value="Queries" style="endArrow=classic;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="backend" target="database" />
+        <mxCell id="arrow5" value="Keys" style="endArrow=classic;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.25;" edge="1" parent="1" source="auth" target="crypto" />
+        <mxCell id="arrow6" value="Events" style="endArrow=classic;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="backend" target="audit" />
+        <mxCell id="arrow7" value="Encrypt" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="crypto" target="helper" />
+        <mxCell id="arrow8" value="Data" style="endArrow=classic;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="helper" target="database" />
+        
+        <!-- Trust Boundaries -->
+        <mxCell id="trust1" value="Client Zone" style="shape=rect;dashed=1;dashPattern=8 4;fillColor=none;strokeColor=#6c8ebf;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="190" y="310" width="200" height="160" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="trust2" value="Server Zone" style="shape=rect;dashed=1;dashPattern=8 4;fillColor=none;strokeColor=#82b366;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="440" y="310" width="640" height="470" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="trust3" value="Security Core (protected zone)" style="shape=rect;dashed=1;dashPattern=8 4;fillColor=none;strokeColor=#b85450;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="690" y="310" width="390" height="470" as="geometry" />
+        </mxCell>
+        
+        <!-- Legend -->
+        <mxCell id="legend" value="&lt;b&gt;Legend:&lt;/b&gt;&lt;br&gt;User&lt;br&gt;Frontend&lt;br&gt;Backend&lt;br&gt;Security Layer&lt;br&gt;Database" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;whiteSpace=wrap;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;" vertex="1" parent="1">
+          <mxGeometry x="50" y="50" width="120" height="100" as="geometry" />
+        </mxCell>
+        
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
