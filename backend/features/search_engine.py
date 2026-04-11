@@ -13,7 +13,6 @@ from typing import List
 from sqlalchemy.orm import Session
 from backend.database.models import PasswordEntry
 from backend.core.encryption_helper import EncryptionHelper
-from backend.core.crypto_core import zero_memory
 
 class SearchService:
     """Сервис поиска по зашифрованным данным."""
@@ -24,22 +23,8 @@ class SearchService:
 
     def search_by_title(self, user_id: int, query: str) -> List[PasswordEntry]:
         """Ищет записи по Слепому Индексу заголовка."""
-        blind_index_hex = None
-        
-        # Запрашиваем временный контекст ключа
         with self.encryption_helper._operation_key() as key:
-            query_bytes = bytearray(query.encode("utf-8"))
-            try:
-                # Генерируем HMAC хэш от поискового запроса
-                if hasattr(self.encryption_helper._crypto, "generate_blind_index"):
-                    blind_index_bytes = self.encryption_helper._crypto.generate_blind_index(
-                        bytes(query_bytes), bytes(key)
-                    )
-                    if blind_index_bytes:
-                        blind_index_hex = blind_index_bytes.hex()
-            finally:
-                # Обязательное автозатирание поискового запроса
-                zero_memory(query_bytes)
+            blind_index_hex = self.encryption_helper.generate_blind_index(query, key)
         
         # Fallback, если Blind Index еще не задеплоен BE1
         if not blind_index_hex:

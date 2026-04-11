@@ -1,28 +1,38 @@
 # -*- coding: utf-8 -*-
 """
-Encryption Helper - Bridge between CRUD and Crypto modules.
-Provides easy-to-use methods for encrypting and decrypting PasswordEntry records.
+Encryption helper backed by the Rust + PyO3 crypto core.
+
+The bridge only accepts mutable Python buffers or Rust-managed LockedBuffer
+instances for sensitive inputs. Plaintext is encoded into bytearray buffers,
+passed to Rust without creating intermediate Python `bytes`, and zeroized in
+`finally` blocks immediately after the FFI call returns.
 """
 
+from __future__ import annotations
+
 from contextlib import contextmanager
-from typing import Dict, Any, Optional, Callable, Iterator
+from typing import Any, Callable, Dict, Iterator, Optional
 import json
+
 from pydantic import BaseModel, SecretStr
 
-from backend.core.crypto_core import CryptoCore, MemoryGuard, DecryptionError, zero_memory
+from backend.core.crypto_bridge import LockedBuffer, bridge, zeroize_mutable_buffer
+from backend.core.crypto_core import DecryptionError
 
 
 class EntryFieldsRaw(BaseModel):
     """Raw (unencrypted) entry fields."""
+
     title: SecretStr
-    username: Optional[str] = None
+    username: Optional[SecretStr] = None
     password: SecretStr
-    url: Optional[str] = None
+    url: Optional[SecretStr] = None
     notes: Optional[SecretStr] = None
 
 
 class EntryFieldsEncrypted(BaseModel):
-    """Encrypted entry fields, typically stored as hex strings in DB."""
+    """Encrypted entry fields stored as hex strings in the database."""
+
     title_cipher: str
     title_nonce: str
     username_cipher: Optional[str] = None
@@ -38,126 +48,164 @@ class EntryFieldsEncrypted(BaseModel):
 class EncryptionHelper:
     """Helper for securely encrypting database entry fields."""
 
-    def __init__(self, key_provider: Callable[[], bytearray | bytes]):
-        """
-        Initialize EncryptionHelper with on-demand key provider.
-        
-        Args:
-            key_provider: Callable that returns current master key material.
-                Returned data is copied and zeroed after each operation.
-        """
+    def __init__(self, key_provider: Callable[[], LockedBuffer]):
         if not callable(key_provider):
-            raise TypeError("key_provider must be callable and return bytes/bytearray")
+            raise TypeError("key_provider must be callable and return LockedBuffer")
 
         self._key_provider = key_provider
-        self._crypto = CryptoCore()
 
-    def _materialize_operation_key(self) -> bytearray:
-        """Get key from provider and copy it into zeroizable buffer."""
-        source_key = self._key_provider()
-        if not isinstance(source_key, (bytes, bytearray)):
-            raise TypeError("key_provider must return bytes or bytearray")
-        key = bytearray(source_key)
-        if isinstance(source_key, bytearray):
-            zero_memory(source_key)
-        if len(key) != self._crypto.config.key_size:
-            zero_memory(key)
-            raise ValueError(f"Key must be {self._crypto.config.key_size} bytes")
-        return key
+    def _materialize_operation_key(self) -> LockedBuffer:
+        key = self._key_provider()
+        if not isinstance(key, LockedBuffer):
+            raise TypeError("key_provider must return LockedBuffer")
+        return key.duplicate()
 
     @contextmanager
-    def _operation_key(self) -> Iterator[bytearray]:
-        """Yield temporary key buffer that is always zeroed after use."""
+    def _operation_key(self) -> Iterator[LockedBuffer]:
         key = self._materialize_operation_key()
-        with MemoryGuard(key) as guarded_key:
-            yield guarded_key
+        try:
+            yield key
+        finally:
+            key.close()
 
-    def _encrypt_text_field(self, plaintext: str | SecretStr, key: bytearray) -> tuple[str, str]:
-        """Encrypt text, returning (cipher_hex, nonce_hex) and zeroizing intermediate buffers."""
-        text_str = plaintext.get_secret_value() if isinstance(plaintext, SecretStr) else plaintext
-        plaintext_buf = bytearray(text_str.encode("utf-8"))
+    @staticmethod
+    def _secret_to_mutable_buffer(plaintext: str | SecretStr) -> bytearray:
+        text = plaintext.get_secret_value() if isinstance(plaintext, SecretStr) else plaintext
+        return bytearray(text.encode("utf-8"))
+
+    def _encrypt_text_field(
+        self,
+        plaintext: str | SecretStr,
+        key: LockedBuffer,
+    ) -> tuple[str, str]:
+        plaintext_buf = self._secret_to_mutable_buffer(plaintext)
         try:
-            encrypted_data = self._crypto.encrypt(plaintext_buf, key)
-            nonce_size = self._crypto.config.nonce_size
-            nonce = encrypted_data[:nonce_size]
-            cipher = encrypted_data[nonce_size:]
-            return cipher.hex(), nonce.hex()
+            return bridge.encrypt_for_storage(key, plaintext_buf, wipe_plaintext=True)
         finally:
-            zero_memory(plaintext_buf)
-            
-    def _decrypt_text_field(self, cipher_hex: str, nonce_hex: str, key: bytearray) -> bytearray:
-        """Decrypt text, returns bytearray buffer which caller MUST zero after use."""
-        encrypted_data = bytearray.fromhex(nonce_hex) + bytearray.fromhex(cipher_hex)
+            zeroize_mutable_buffer(plaintext_buf)
+
+    def _decrypt_text_field(self, cipher_hex: str, nonce_hex: str, key: LockedBuffer) -> bytearray:
+        locked_plaintext = bridge.decrypt_from_storage(key, cipher_hex, nonce_hex)
         try:
-            return self._crypto.decrypt(encrypted_data, key)
+            return bridge.locked_buffer_to_bytearray(locked_plaintext)
         finally:
-            zero_memory(encrypted_data)
+            locked_plaintext.close()
+
+    def generate_blind_index(self, plaintext: str | SecretStr, key: LockedBuffer) -> str:
+        plaintext_buf = self._secret_to_mutable_buffer(plaintext)
+        try:
+            return bridge.generate_blind_index_hmac(key, plaintext_buf, wipe_title=True)
+        finally:
+            zeroize_mutable_buffer(plaintext_buf)
 
     def encrypt_entry_fields(self, raw: EntryFieldsRaw) -> EntryFieldsEncrypted:
-        """Encrypt all sensitive fields in an entry."""
         with self._operation_key() as key:
             title_enc, title_nonce = self._encrypt_text_field(raw.title, key)
             pass_enc, pass_nonce = self._encrypt_text_field(raw.password, key)
-            
-            user_enc, user_nonce = self._encrypt_text_field(raw.username, key) if raw.username else (None, None)
-            url_enc, url_nonce = self._encrypt_text_field(raw.url, key) if raw.url else (None, None)
-            notes_enc, notes_nonce = self._encrypt_text_field(raw.notes, key) if raw.notes else (None, None)
-            
+
+            user_enc, user_nonce = (
+                self._encrypt_text_field(raw.username, key) if raw.username else (None, None)
+            )
+            url_enc, url_nonce = (
+                self._encrypt_text_field(raw.url, key) if raw.url else (None, None)
+            )
+            notes_enc, notes_nonce = (
+                self._encrypt_text_field(raw.notes, key) if raw.notes else (None, None)
+            )
+
             return EntryFieldsEncrypted(
-                title_cipher=title_enc, title_nonce=title_nonce,
-                username_cipher=user_enc, username_nonce=user_nonce,
-                password_cipher=pass_enc, password_nonce=pass_nonce,
-                url_cipher=url_enc, url_nonce=url_nonce,
-                notes_cipher=notes_enc, notes_nonce=notes_nonce
+                title_cipher=title_enc,
+                title_nonce=title_nonce,
+                username_cipher=user_enc,
+                username_nonce=user_nonce,
+                password_cipher=pass_enc,
+                password_nonce=pass_nonce,
+                url_cipher=url_enc,
+                url_nonce=url_nonce,
+                notes_cipher=notes_enc,
+                notes_nonce=notes_nonce,
             )
 
     def decrypt_entry_fields(self, encrypted: EntryFieldsEncrypted) -> Dict[str, Optional[bytearray]]:
-        """Decrypt all sensitive fields in an entry. Returns dict of bytearrays to avoid immutable string leaks."""
         with self._operation_key() as key:
             try:
-                title_dec = self._decrypt_text_field(encrypted.title_cipher, encrypted.title_nonce, key)
-                pass_dec = self._decrypt_text_field(encrypted.password_cipher, encrypted.password_nonce, key)
-                
-                user_dec = self._decrypt_text_field(encrypted.username_cipher, encrypted.username_nonce, key) if encrypted.username_cipher else None
-                url_dec = self._decrypt_text_field(encrypted.url_cipher, encrypted.url_nonce, key) if encrypted.url_cipher else None
-                notes_dec = self._decrypt_text_field(encrypted.notes_cipher, encrypted.notes_nonce, key) if encrypted.notes_cipher else None
-                
                 return {
-                    "title": title_dec,
-                    "username": user_dec,
-                    "password": pass_dec,
-                    "url": url_dec,
-                    "notes": notes_dec
+                    "title": self._decrypt_text_field(
+                        encrypted.title_cipher,
+                        encrypted.title_nonce,
+                        key,
+                    ),
+                    "username": (
+                        self._decrypt_text_field(
+                            encrypted.username_cipher,
+                            encrypted.username_nonce,
+                            key,
+                        )
+                        if encrypted.username_cipher and encrypted.username_nonce
+                        else None
+                    ),
+                    "password": self._decrypt_text_field(
+                        encrypted.password_cipher,
+                        encrypted.password_nonce,
+                        key,
+                    ),
+                    "url": (
+                        self._decrypt_text_field(encrypted.url_cipher, encrypted.url_nonce, key)
+                        if encrypted.url_cipher and encrypted.url_nonce
+                        else None
+                    ),
+                    "notes": (
+                        self._decrypt_text_field(
+                            encrypted.notes_cipher,
+                            encrypted.notes_nonce,
+                            key,
+                        )
+                        if encrypted.notes_cipher and encrypted.notes_nonce
+                        else None
+                    ),
                 }
-            except Exception as e:
-                raise DecryptionError(f"Failed to decrypt entry fields: {e}")
+            except Exception as exc:  # pragma: no cover - PyO3 exceptions are runtime specific
+                raise DecryptionError(f"Failed to decrypt entry fields: {exc}") from exc
 
     def encrypt_custom_fields(self, custom_data: Dict[str, Any]) -> str:
-        """Encrypt custom JSON schema."""
         with self._operation_key() as key:
-            json_buf = bytearray(json.dumps(custom_data).encode("utf-8"))
+            json_buf = bytearray(
+                json.dumps(custom_data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            )
             try:
-                return self._crypto.encrypt(json_buf, key).hex()
+                envelope = bridge.aes_gcm_encrypt(key, json_buf, wipe_plaintext=True)
+                return (envelope.nonce + envelope.ciphertext + envelope.tag).hex()
             finally:
-                zero_memory(json_buf)
+                zeroize_mutable_buffer(json_buf)
 
     def decrypt_custom_fields(self, encrypted_hex: str) -> Dict[str, Any]:
-        """Decrypt custom JSON schema."""
         if not encrypted_hex:
             return {}
+
+        packed = bytes.fromhex(encrypted_hex)
+        if len(packed) < 12 + 16:
+            raise DecryptionError("Encrypted custom payload is malformed")
+
+        nonce = packed[:12]
+        ciphertext = packed[12:-16]
+        tag = packed[-16:]
+
         with self._operation_key() as key:
+            locked_plaintext = bridge.aes_gcm_decrypt(key, ciphertext, nonce, tag)
             try:
-                json_data = self._crypto.decrypt(bytearray.fromhex(encrypted_hex), key)
-                res = json.loads(json_data.decode('utf-8'))
-                zero_memory(json_data)
-                return res
-            except Exception as e:
-                raise DecryptionError(f"Failed to decrypt custom fields: {e}")
+                json_buf = bridge.locked_buffer_to_bytearray(locked_plaintext)
+                try:
+                    return json.loads(json_buf.decode("utf-8"))
+                finally:
+                    zeroize_mutable_buffer(json_buf)
+            except Exception as exc:  # pragma: no cover
+                raise DecryptionError(f"Failed to decrypt custom fields: {exc}") from exc
+            finally:
+                locked_plaintext.close()
 
     def decrypt_title_cipher(self, title_cipher: str, title_nonce: str) -> bytearray:
-        """Decrypt only title field to minimize plaintext exposure during search."""
         with self._operation_key() as key:
             try:
                 return self._decrypt_text_field(title_cipher, title_nonce, key)
-            except Exception as e:
-                raise DecryptionError(f"Failed to decrypt title field: {e}")
+            except Exception as exc:  # pragma: no cover
+                raise DecryptionError(f"Failed to decrypt title field: {exc}") from exc

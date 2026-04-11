@@ -1,0 +1,21 @@
+[package]
+name = "bitnet_crypto_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bitnet_crypto_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+aes-gcm = { version = "0.10.3", features = ["aes"] }
+argon2 = "0.5.3"
+hex = "0.4.3"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+pyo3 = { version = "0.23.4", features = ["extension-module", "abi3-py311"] }
+rand = "0.8.5"
+secrecy = "0.10.3"
+sha2 = "0.10.8"
+windows-sys = { version = "0.59.0", features = ["Win32_Foundation", "Win32_System_Memory"] }
+zeroize = "1.8.1"

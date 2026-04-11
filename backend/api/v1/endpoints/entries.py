@@ -11,31 +11,14 @@ from pydantic import SecretStr
 
 from backend.database.session import get_db
 from backend.database.schemas import EntryCreateSchema, EntryUpdateSchema, EntryResponseSchema, EntryListItemSchema
-from backend.database.entry_service import EntryService, EntryNotFoundError
+from backend.database.entry_service import EntryConflictError, EntryService, EntryNotFoundError
 from backend.features.search_engine import SearchService
 from backend.core.encryption_helper import EncryptionHelper
 from backend.core.crypto_core import zero_memory
 from backend.database.models import PasswordEntry
+from backend.api.v1.endpoints.auth import get_user_context
 
 router = APIRouter()
-
-# --- ПОРОК АРХИТЕКТУРЫ: КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ ---
-def get_user_context() -> tuple[int, EncryptionHelper]:
-    """
-    Заглушка (Mock) для Dependency Injection (DI).
-    
-    Мехника (Провал в продакшене):
-    1. Роутер извлекает JWT из Authorization Header или HTTP-only cookie.
-    2. По субьекту токена мы находим `user_id`. (Осуществляется через AuthManager).
-    3. Мы достаем **эфемерный мастер-ключ** из пула памяти AuthManager Никиты, 
-       который разблокирован пользователем на время сессии 15 мин (in-memory redis/dict).
-    4. Оборачиваем ключ в EncryptionHelper.
-    """
-    mock_user_id = 1
-    # Эмулируем ключ 32 байта для EncryptionHelper (обычно это делегируется в AuthManager)
-    def key_provider() -> bytearray:
-        return bytearray(b"0" * 32)
-    return mock_user_id, EncryptionHelper(key_provider=key_provider)
 
 
 @router.post("/", response_model=EntryResponseSchema, status_code=status.HTTP_201_CREATED)
@@ -83,6 +66,8 @@ def update_entry(
         return service.get_entry(user_id, entry_id)
     except EntryNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except EntryConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.delete("/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from pydantic import SecretStr
 
 from backend.database.session import get_db
-from backend.api.v1.endpoints.entries import get_user_context
+from backend.api.v1.endpoints.auth import get_user_context
 from backend.database.schemas import EntryListItemSchema
 from backend.core.encryption_helper import EncryptionHelper
 from backend.database.models import PasswordEntry

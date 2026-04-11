@@ -4,6 +4,7 @@ import time
 import logging
 
 from backend.api.v1.endpoints import auth, entries, trash
+from backend.database.session import init_db
 
 # Настройка безопасного логгера
 logger = logging.getLogger("api_logger")
@@ -24,6 +25,11 @@ app = FastAPI(
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(entries.router, prefix="/api/v1/entries", tags=["Entries"])
 app.include_router(trash.router, prefix="/api/v1/trash", tags=["Trash"])
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    init_db()
 
 @app.middleware("http")
 async def secure_logging_middleware(request: Request, call_next):
