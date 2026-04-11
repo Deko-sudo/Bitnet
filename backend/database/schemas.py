@@ -1,138 +1,53 @@
 # -*- coding: utf-8 -*-
 """
-Pydantic Schemas for API - Password Manager
+Pydantic schemas for Database and API data validation (Zero-Trust adherence).
+
+Архитектурный выбор (Pydantic v2):
+- Использование `SecretStr` обязательно для всех чувствительных строковых полей (даже опциональных). 
+  Pydantic перехватит `repr` и `str` преобразования, маскируя значения как '**********'. Это 
+  фундаментально для предотвращения утечек паролей и заголовков в системных логах сервера.
+- `ConfigDict(from_attributes=True)` – стандарт Pydantic v2 для маппинга SQLAlchemy 2.0 
+  моделей directamente в Pydantic схемы ответов.
 """
 
-from pydantic import BaseModel, SecretStr, EmailStr, field_validator
+from typing import Optional
 from datetime import datetime
-from typing import Optional, List
-import re
-
-# =============================================================================
-# Users
-# =============================================================================
-
-class UserCreate(BaseModel):
-    """Schema for user creation."""
-    username: str
-    password: SecretStr
-    email: EmailStr
-    
-    @field_validator('password')
-    @classmethod
-    def validate_password_strength(cls, v: SecretStr) -> SecretStr:
-        password = v.get_secret_value()
-        if len(password) < 12:
-            raise ValueError("Password must be at least 12 characters")
-        has_upper = bool(re.search(r'[A-Z]', password))
-        has_lower = bool(re.search(r'[a-z]', password))
-        has_digit = bool(re.search(r'\d', password))
-        if not (has_upper and has_lower and has_digit):
-            raise ValueError("Password must contain uppercase, lowercase, and digits")
-        return v
-    
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "username": "john_doe",
-                "password": "**********",
-                "email": "john@example.com"
-            }
-        }
-    }
-
-
-class UserResponse(BaseModel):
-    """Schema for user response."""
-    id: int
-    username: str
-    created_at: datetime
-    
-    model_config = {"from_attributes": True}
-
-
-# =============================================================================
-# Password Entries
-# =============================================================================
+from pydantic import BaseModel, SecretStr, ConfigDict
 
 class EntryCreateSchema(BaseModel):
-    """Schema for password entry creation with validation."""
-    title: str
-    username: Optional[str] = None
+    """Схема создания новой записи с паролем."""
+    title: SecretStr
+    username: Optional[SecretStr] = None
     password: SecretStr
-    url: Optional[str] = None
-    notes: Optional[str] = None
-    
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "title": "Google Account",
-                "username": "john@gmail.com",
-                "password": "**********",
-                "url": "https://google.com",
-                "notes": "Work account"
-            }
-        }
-    }
-
+    url: Optional[SecretStr] = None
+    notes: Optional[SecretStr] = None
 
 class EntryUpdateSchema(BaseModel):
-    """Schema for updating, all fields are optional."""
-    title: Optional[str] = None
-    username: Optional[str] = None
+    """Схема обновления записи (все поля необязательны)."""
+    title: Optional[SecretStr] = None
+    username: Optional[SecretStr] = None
     password: Optional[SecretStr] = None
-    url: Optional[str] = None
-    notes: Optional[str] = None
-
+    url: Optional[SecretStr] = None
+    notes: Optional[SecretStr] = None
 
 class EntryResponseSchema(BaseModel):
-    """Schema for detailed response with decrypted fields."""
+    """Схема ответа для клиента (содержит расшифрованные поля в виде SecretStr)."""
     id: int
     user_id: int
-    title: str
-    username: Optional[str]
-    url: Optional[str]
-    notes: Optional[str]
+    title: SecretStr
+    username: Optional[SecretStr] = None
+    password: SecretStr
+    url: Optional[SecretStr] = None
+    notes: Optional[SecretStr] = None
     created_at: datetime
     updated_at: datetime
-    
-    model_config = {"from_attributes": True}
 
+    model_config = ConfigDict(from_attributes=True)
 
 class EntryListItemSchema(BaseModel):
-    """Schema for listing entries without sensitive passwords."""
+    """Схема списка записей (содержит только метаданные)."""
     id: int
-    user_id: int
-    title: str
-    url: Optional[str]
-    created_at: datetime
-    updated_at: datetime
-    
-    model_config = {"from_attributes": True}
+    title: SecretStr
+    url: Optional[SecretStr] = None
 
-
-# =============================================================================
-# Authentication
-# =============================================================================
-
-class LoginRequest(BaseModel):
-    """Schema for login request."""
-    username: str
-    password: SecretStr
-    
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "username": "john_doe",
-                "password": "**********"
-            }
-        }
-    }
-
-
-class LoginResponse(BaseModel):
-    """Schema for login response."""
-    access_token: str
-    token_type: str = "bearer"
-    user_id: int
-    username: str
+    model_config = ConfigDict(from_attributes=True)

@@ -21,8 +21,10 @@ from typing import Optional, Any, Literal, Union
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.exceptions import InvalidTag
 
+from pydantic import SecretStr
 from argon2.low_level import hash_secret_raw, Type
 
 from .config import (
@@ -218,7 +220,7 @@ class CryptoCore:
 
         return secrets.token_bytes(length)
 
-    def derive_master_key(self, password: str, salt: bytes) -> bytes:
+    def derive_master_key(self, password: Union[SecretStr, str], salt: Union[bytes, bytearray]) -> bytearray:
         """
         Derive master key from password using Argon2id.
 
@@ -244,27 +246,31 @@ class CryptoCore:
             >>> salt = crypto.generate_salt()
             >>> master_key = crypto.derive_master_key("my_password", salt)
         """
-        if not password:
+        password_str = password.get_secret_value() if isinstance(password, SecretStr) else password
+        if not password_str:
             raise ValueError("Password cannot be empty")
 
         if len(salt) < 8:
             raise ValueError("Salt must be at least 8 bytes")
 
+        password_bytes = bytearray(password_str.encode("utf-8"))
         try:
             key = hash_secret_raw(
-                secret=password.encode("utf-8"),
-                salt=salt,
+                secret=bytes(password_bytes),
+                salt=bytes(salt),
                 time_cost=self._config.argon2_time_cost,
                 memory_cost=self._config.argon2_memory_cost,
                 parallelism=self._config.argon2_parallelism,
                 hash_len=self._config.argon2_hash_len,
                 type=Type.ID,  # Argon2id (hybrid)
             )
-            return key
+            return bytearray(key)
         except Exception as e:
             raise KeyDerivationError(f"Failed to derive key: {e}")
+        finally:
+            zero_memory(password_bytes)
 
-    def derive_subkey(self, master_key: bytes, context: bytes) -> bytes:
+    def derive_subkey(self, master_key: Union[bytes, bytearray], context: bytes) -> bytearray:
         """
         Derive subkey from master key using HKDF.
 
@@ -297,7 +303,7 @@ class CryptoCore:
                 salt=None,
                 info=context,
             )
-            return hkdf.derive(master_key)
+            return bytearray(hkdf.derive(bytes(master_key)))
         except Exception as e:
             raise KeyDerivationError(f"Failed to derive subkey: {e}")
 
@@ -305,7 +311,7 @@ class CryptoCore:
     # Encryption Methods
     # ==========================================================================
 
-    def encrypt(self, plaintext: bytes, key: bytes) -> bytes:
+    def encrypt(self, plaintext: Union[bytes, bytearray], key: Union[bytes, bytearray]) -> bytearray:
         """
         Encrypt data using AES-256-GCM.
 
@@ -333,15 +339,15 @@ class CryptoCore:
             raise ValueError(f"Key must be {self._config.key_size} bytes")
 
         try:
-            aesgcm = AESGCM(key)
+            aesgcm = AESGCM(bytes(key))
             nonce = secrets.token_bytes(self._config.nonce_size)
-            ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+            ciphertext = aesgcm.encrypt(nonce, bytes(plaintext), None)
             # Format: nonce + auth_tag (included in ciphertext) + data
-            return nonce + ciphertext
+            return bytearray(nonce + ciphertext)
         except Exception as e:
             raise EncryptionError(f"Encryption failed: {e}")
 
-    def decrypt(self, ciphertext: bytes, key: bytes) -> bytes:
+    def decrypt(self, ciphertext: Union[bytes, bytearray], key: Union[bytes, bytearray]) -> bytearray:
         """
         Decrypt data using AES-256-GCM.
 
@@ -368,11 +374,11 @@ class CryptoCore:
             raise ValueError("Ciphertext too short")
 
         try:
-            aesgcm = AESGCM(key)
+            aesgcm = AESGCM(bytes(key))
             nonce = ciphertext[: self._config.nonce_size]
             actual_ciphertext = ciphertext[self._config.nonce_size :]
-            plaintext = aesgcm.decrypt(nonce, actual_ciphertext, None)
-            return plaintext
+            plaintext = aesgcm.decrypt(bytes(nonce), bytes(actual_ciphertext), None)
+            return bytearray(plaintext)
         except InvalidTag:
             raise AuthenticationError("Authentication failed - data may be tampered")
         except Exception as e:
@@ -526,7 +532,7 @@ class CryptoCore:
 # =============================================================================
 
 
-def quick_encrypt(plaintext: bytes, password: str) -> bytes:
+def quick_encrypt(plaintext: Union[bytes, bytearray], password: Union[str, SecretStr]) -> bytearray:
     """
     Quick encryption with password.
 
@@ -543,11 +549,14 @@ def quick_encrypt(plaintext: bytes, password: str) -> bytes:
     crypto = CryptoCore()
     salt = crypto.generate_salt()
     key = crypto.derive_master_key(password, salt)
-    encrypted = crypto.encrypt(plaintext, key)
-    return salt + encrypted
+    try:
+        encrypted = crypto.encrypt(plaintext, key)
+        return bytearray(salt + encrypted)
+    finally:
+        zero_memory(key)
 
 
-def quick_decrypt(ciphertext: bytes, password: str) -> bytes:
+def quick_decrypt(ciphertext: Union[bytes, bytearray], password: Union[str, SecretStr]) -> bytearray:
     """
     Quick decryption with password.
 
@@ -563,7 +572,10 @@ def quick_decrypt(ciphertext: bytes, password: str) -> bytes:
     salt = ciphertext[:salt_len]
     encrypted = ciphertext[salt_len:]
     key = crypto.derive_master_key(password, salt)
-    return crypto.decrypt(encrypted, key)
+    try:
+        return crypto.decrypt(encrypted, key)
+    finally:
+        zero_memory(key)
 
 
 # =============================================================================

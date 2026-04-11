@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  bitnet-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bitnet_server
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      # Защищенный вольюм для персистентности SQLite базы
+      - ./data:/app/data
+    environment:
+      # Переопределение базы в примонтированную директорию
+      - SQLALCHEMY_DATABASE_URL=sqlite:////app/data/bitnet.db
+      - DEBUG=False
+
+volumes:
+  bitnet_data:
