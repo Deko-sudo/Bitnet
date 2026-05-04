@@ -1,0 +1,4 @@
+# file: C:\Users\yakomori\AppData\Roaming\Python\Python314\site-packages\webauthn\helpers\structs.py
+# hypothesis_version: 6.151.13
+
+['android-key', 'android-safetynet', 'apple', 'ble', 'cable', 'client-device', 'cross-platform', 'direct', 'discouraged', 'enterprise', 'fido-u2f', 'hybrid', 'indirect', 'internal', 'multi_device', 'nfc', 'none', 'packed', 'platform', 'preferred', 'present', 'public-key', 'required', 'security-key', 'single_device', 'smart-card', 'supported', 'tpm', 'usb', 'webauthn.create', 'webauthn.get']

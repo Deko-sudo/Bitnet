@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\core\encryption_helper.py
+# hypothesis_version: 6.151.13
+
+['close', 'notes', 'password', 'password_cipher', 'password_nonce', 'title', 'title_cipher', 'title_nonce', 'url', 'username']

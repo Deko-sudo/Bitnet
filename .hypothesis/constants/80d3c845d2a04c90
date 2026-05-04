@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\api\v1\endpoints\fido2.py
+# hypothesis_version: 6.151.13
+
+[300, '/credentials', '/login/options', '/login/verify', '/register/options', '/register/verify', '300', 'BITNET_FIDO2_ORIGIN', 'BITNET_FIDO2_RP_ID', 'BITNET_FIDO2_RP_NAME', 'BitNet Vault', 'Credential not found', 'Unknown security key', 'User not found', 'alg', 'allowCredentials', 'allow_credentials', 'attestation', 'big', 'challenge', 'created_at', 'credential_id', 'displayName', 'id', 'label', 'last_used_at', 'localhost', 'message', 'name', 'pubKeyCredParams', 'pub_key_cred_params', 'public-key', 'rawId', 'residentKey', 'rp', 'sign_count', 'timeout', 'type', 'user', 'userVerification', 'user_verification', 'utf-8']

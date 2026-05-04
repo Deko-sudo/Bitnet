@@ -1,8 +1,10 @@
 use std::ffi::c_void;
 
-use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes256Gcm, Key, Nonce, Tag};
+use aes_gcm_siv::aead::{AeadInPlace, KeyInit};
+use aes_gcm_siv::{Aes256GcmSiv, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
+use generic_array::typenum::U16;
+use generic_array::GenericArray;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use pyo3::buffer::PyBuffer;
@@ -13,9 +15,16 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox};
 use sha2::Sha256;
-use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::System::Memory::{VirtualLock, VirtualUnlock};
 use zeroize::Zeroize;
+
+// Cross-platform memory locking
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::GetLastError;
+#[cfg(windows)]
+use windows_sys::Win32::System::Memory::{VirtualLock, VirtualUnlock};
+
+#[cfg(unix)]
+use libc::{mlock, munlock};
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -44,13 +53,28 @@ fn lock_region(ptr: *mut u8, len: usize) -> PyResult<()> {
         return Ok(());
     }
 
-    let locked = unsafe { VirtualLock(ptr.cast::<c_void>(), len) };
-    if locked == 0 {
-        let code = unsafe { GetLastError() };
-        return Err(runtime_error(format!(
-            "VirtualLock failed for {} bytes (Win32={code})",
-            len
-        )));
+    #[cfg(windows)]
+    {
+        let locked = unsafe { VirtualLock(ptr.cast::<c_void>(), len) };
+        if locked == 0 {
+            let code = unsafe { GetLastError() };
+            return Err(runtime_error(format!(
+                "VirtualLock failed for {} bytes (Win32={code})",
+                len
+            )));
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let result = unsafe { mlock(ptr.cast::<c_void>(), len) };
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            return Err(runtime_error(format!(
+                "mlock failed for {} bytes (errno={errno})",
+                len
+            )));
+        }
     }
 
     Ok(())
@@ -61,8 +85,18 @@ fn unlock_region(ptr: *mut u8, len: usize) {
         return;
     }
 
-    unsafe {
-        VirtualUnlock(ptr.cast::<c_void>(), len);
+    #[cfg(windows)]
+    {
+        unsafe {
+            VirtualUnlock(ptr.cast::<c_void>(), len);
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        unsafe {
+            munlock(ptr.cast::<c_void>(), len);
+        }
     }
 }
 
@@ -189,7 +223,7 @@ impl LockedBuffer {
     }
 
     fn copy_into(&self, py: Python<'_>, target: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut buffer = PyBuffer::<u8>::get(target)?;
+        let buffer = PyBuffer::<u8>::get(target)?;
         if buffer.readonly() {
             return Err(type_error(
                 "target buffer must be writable (bytearray or writable memoryview)",
@@ -249,9 +283,8 @@ fn with_py_buffer<R>(
         ));
     }
 
-    let slice = unsafe {
-        std::slice::from_raw_parts(buffer.buf_ptr().cast::<u8>(), buffer.len_bytes())
-    };
+    let slice =
+        unsafe { std::slice::from_raw_parts(buffer.buf_ptr().cast::<u8>(), buffer.len_bytes()) };
 
     f(slice)
 }
@@ -287,7 +320,10 @@ fn generate_locked_random(length: usize) -> PyResult<LockedBuffer> {
 }
 
 #[pyfunction]
-fn argon2_derive_key(master_pwd: &Bound<'_, PyAny>, salt: &Bound<'_, PyAny>) -> PyResult<LockedBuffer> {
+fn argon2_derive_key(
+    master_pwd: &Bound<'_, PyAny>,
+    salt: &Bound<'_, PyAny>,
+) -> PyResult<LockedBuffer> {
     with_py_buffer(master_pwd, true, |password_bytes| {
         with_secret_input(salt, false, |salt_bytes| {
             if salt_bytes.len() < 8 {
@@ -325,11 +361,13 @@ fn aes_gcm_encrypt(
 ) -> PyResult<(Py<PyBytes>, Py<PyBytes>, Py<PyBytes>)> {
     let key_bytes = key.as_slice()?;
     if key_bytes.len() != KEY_LEN {
-        return Err(value_error(format!("AES-256-GCM requires a {KEY_LEN}-byte key")));
+        return Err(value_error(format!(
+            "AES-256-GCM-SIV requires a {KEY_LEN}-byte key"
+        )));
     }
 
     with_secret_input(plaintext, true, |plain_bytes| {
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key_bytes));
+        let cipher = Aes256GcmSiv::new(Key::<Aes256GcmSiv>::from_slice(key_bytes));
 
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
@@ -337,7 +375,7 @@ fn aes_gcm_encrypt(
         let mut ciphertext = plain_bytes.to_vec();
         let tag = cipher
             .encrypt_in_place_detached(Nonce::from_slice(&nonce), b"", &mut ciphertext)
-            .map_err(|err| runtime_error(format!("AES-GCM encryption failed: {err}")))?;
+            .map_err(|err| runtime_error(format!("AES-GCM-SIV encryption failed: {err}")))?;
 
         Ok((
             PyBytes::new(py, &ciphertext).unbind(),
@@ -356,7 +394,9 @@ fn aes_gcm_decrypt(
 ) -> PyResult<LockedBuffer> {
     let key_bytes = key.as_slice()?;
     if key_bytes.len() != KEY_LEN {
-        return Err(value_error(format!("AES-256-GCM requires a {KEY_LEN}-byte key")));
+        return Err(value_error(format!(
+            "AES-256-GCM-SIV requires a {KEY_LEN}-byte key"
+        )));
     }
 
     with_secret_input(ciphertext, false, |ciphertext_bytes| {
@@ -371,10 +411,11 @@ fn aes_gcm_decrypt(
                     return Err(value_error(format!("tag must be exactly {TAG_LEN} bytes")));
                 }
 
-                let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key_bytes));
+                let cipher = Aes256GcmSiv::new(Key::<Aes256GcmSiv>::from_slice(key_bytes));
 
                 let mut plaintext = LockedBuffer::from_slice(ciphertext_bytes)?;
-                let auth_tag = Tag::<Aes256Gcm>::clone_from_slice(tag_bytes);
+                let mut auth_tag = GenericArray::<u8, U16>::default();
+                auth_tag.copy_from_slice(tag_bytes);
 
                 cipher
                     .decrypt_in_place_detached(
@@ -383,7 +424,7 @@ fn aes_gcm_decrypt(
                         plaintext.inner.as_mut_slice()?,
                         &auth_tag,
                     )
-                    .map_err(|_| runtime_error("AES-GCM authentication failed"))?;
+                    .map_err(|_| runtime_error("AES-GCM-SIV authentication failed"))?;
 
                 Ok(plaintext)
             })
@@ -409,7 +450,7 @@ fn generate_blind_index_hmac(
         hkdf.expand(BLIND_INDEX_INFO, &mut derived_index_key)
             .map_err(|err| runtime_error(format!("HKDF expansion failed: {err}")))?;
 
-        let mut mac = BlindIndexMac::new_from_slice(&derived_index_key)
+        let mut mac = <BlindIndexMac as Mac>::new_from_slice(&derived_index_key)
             .map_err(|err| runtime_error(format!("HMAC initialization failed: {err}")))?;
         mac.update(title_bytes);
         let blind_index = mac.finalize().into_bytes();

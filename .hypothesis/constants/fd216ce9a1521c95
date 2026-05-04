@@ -1,0 +1,4 @@
+# file: C:\Users\yakomori\AppData\Roaming\Python\Python314\site-packages\cbor2\_decoder.py
+# hypothesis_version: 6.151.13
+
+[100, 255, 256, 258, 260, 261, 400, 1004, 43000, 55799, 65536, 719163, 4294967296, '-', '>H', '>L', '>Q', '>d', '>e', '>f', 'T', '_decode_depth', '_fp', '_fp_read', '_immutable', '_max_depth', '_object_hook', '_share_index', '_shareables', '_str_errors', '_stringref_namespace', '_tag_hook', 'backslashreplace', 'error', 'replace', 'strict', 'surrogateescape', 'utf-8']

@@ -1,0 +1,87 @@
+# ===========================================================================
+# Caddyfile — Production Reverse Proxy Configuration
+# ===========================================================================
+# Automatic HTTPS (TLS) with security headers
+# ===========================================================================
+
+# For local development (no automatic TLS)
+localhost {
+    # Proxy everything to the backend app
+    reverse_proxy * app:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # =========================================================================
+    # Security Headers
+    # =========================================================================
+    header {
+
+        # Prevent MIME-type sniffing
+        X-Content-Type-Options "nosniff"
+
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+
+        # Permissions policy (restrict browser features)
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+
+        # Content Security Policy (Strict - No 'unsafe-inline' for scripts)
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.bitnet.internal; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+        # Remove server header
+        -Server
+    }
+
+    # =========================================================================
+    # TLS Configuration (disabled for localhost)
+    # =========================================================================
+    # tls {
+    #     protocols tls1.3
+    # }
+
+    # Logging
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+
+    # Compression
+    encode gzip zstd
+}
+
+# ===========================================================================
+# Development Configuration (localhost, no TLS)
+# ===========================================================================
+# Uncomment below and comment out the block above for local testing
+# ===========================================================================
+# localhost {
+#     handle /api/* {
+#         reverse_proxy app:8000
+#     }
+#
+#     handle /health {
+#         reverse_proxy app:8000
+#     }
+#
+#     handle {
+#         root * /srv/frontend/dist
+#         file_server
+#         try_files {path} /index.html
+#     }
+#
+#     header {
+#         X-Frame-Options "DENY"
+#         X-Content-Type-Options "nosniff"
+#         Referrer-Policy "strict-origin-when-cross-origin"
+#     }
+#
+#     log {
+#         output stdout
+#         format console
+#         level DEBUG
+#     }
+# }

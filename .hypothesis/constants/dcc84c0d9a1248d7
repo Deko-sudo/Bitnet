@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\core\config.py
+# hypothesis_version: 6.151.13
+
+[40.0, 60.0, 300, 1024, 1800, 65536, 'argon2_memory_cost', 'd', 'forbid', 'i', 'id', 'sha256', 'sha384', 'sha512']

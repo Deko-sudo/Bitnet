@@ -1,100 +1,170 @@
 # -*- coding: utf-8 -*-
-"""
-Pytest configuration — shared fixtures for Nikita (BE1) and Alex (BE2).
-
-Provides:
-- In-memory SQLite engine for isolated test databases
-- Session-scoped SQLAlchemy Base metadata
-- Function-scoped Session fixture with automatic rollback
-"""
-
-import sys
 import os
-
-# Ensure project root is on sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-from typing import Generator
+import secrets
+import sys
+import tempfile
+from typing import AsyncGenerator, Generator
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.database.models import Base
+# ---------------------------------------------------------------------------
+# Ensure project root is on sys.path
+# ---------------------------------------------------------------------------
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+from backend.core.audit_logger import Base
+from backend.database import models as _models
+from backend.database.session import get_db
+from backend.main import app
 
 # =============================================================================
-# In-Memory SQLite Engine
+# Server Wrap Key (Shared across test session)
 # =============================================================================
 
 
 @pytest.fixture(scope="session")
-def engine():
-    """
-    Create an in-memory SQLite engine shared across the test session.
+def server_wrap_key_file() -> Generator[str, None, None]:
+    key_bytes = secrets.token_bytes(32)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".key") as fh:
+        fh.write(key_bytes)
+        path = fh.name
 
-    Uses StaticPool so the :memory: database persists across multiple
-    connections within the same session.
-    """
-    eng = create_engine(
-        "sqlite:///:memory:",
+    original = os.environ.get("BITNET_SERVER_WRAP_KEY_FILE")
+    os.environ["BITNET_SERVER_WRAP_KEY_FILE"] = path
+    yield path
+    if original:
+        os.environ["BITNET_SERVER_WRAP_KEY_FILE"] = original
+    else:
+        os.environ.pop("BITNET_SERVER_WRAP_KEY_FILE", None)
+    os.unlink(path)
+
+
+# =============================================================================
+# In-Memory SQLite Async Engine
+# =============================================================================
+
+
+@pytest_asyncio.fixture(scope="session")
+async def engine(server_wrap_key_file):
+    eng = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+        future=True,
     )
-    Base.metadata.create_all(eng)
+
+    @event.listens_for(eng.sync_engine, "connect")
+    def _set_pragmas(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.close()
+
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield eng
-    Base.metadata.drop_all(eng)
-    eng.dispose()
+    await eng.dispose()
 
 
 # =============================================================================
-# SQLAlchemy Session
+# Async DB Session (per-test, auto-rollback)
 # =============================================================================
 
 
-@pytest.fixture()
-def db_session(engine) -> Generator[Session, None, None]:
-    """
-    Provide a transactional database session for each test.
-
-    The session is rolled back after the test completes, ensuring
-    complete isolation between tests.
-
-    Yields:
-        SQLAlchemy Session bound to in-memory SQLite.
-    """
-    connection = engine.connect()
-    transaction = connection.begin()
-    session_factory = sessionmaker(
-        bind=connection,
-        expire_on_commit=False,
-    )
+@pytest_asyncio.fixture()
+async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
+    connection = await engine.connect()
+    transaction = await connection.begin()
+    session_factory = async_sessionmaker(bind=connection, expire_on_commit=False)
     session = session_factory()
 
     yield session
 
-    session.close()
-    transaction.rollback()
-    connection.close()
+    await session.close()
+    await transaction.rollback()
+    await connection.close()
 
 
 # =============================================================================
-# Crypto Test Helpers
+# Async FastAPI Client
 # =============================================================================
 
 
-@pytest.fixture()
-def sample_master_key() -> bytearray:
+@pytest_asyncio.fixture()
+async def client(engine) -> AsyncGenerator[AsyncClient, None]:
+    connection = await engine.connect()
+    transaction = await connection.begin()
+
+    AsyncSessionLocal = async_sessionmaker(bind=connection, expire_on_commit=False)
+
+    async def _override_get_db():
+        async with AsyncSessionLocal() as sess:
+            yield sess
+
+    app.dependency_overrides[get_db] = _override_get_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+    await transaction.rollback()
+    await connection.close()
+
+
+# (Registered User Fixtures ... remained similar but using AsyncClient)
+
+# =============================================================================
+# Registered User + Auth Headers (for API integration tests)
+# =============================================================================
+
+_TEST_PASSWORD = "SecureP@ssw0rd2024!"
+
+
+@pytest_asyncio.fixture()
+async def registered_user(db_session) -> dict:
     """
-    Provide a deterministic 32-byte master key for tests.
-
-    WARNING: This is NOT a real key — only for unit tests.
+    Регистрирует пользователя через API и возвращает его данные.
     """
-    return bytearray(b"\x00" * 32)
+    from httpx import ASGITransport, AsyncClient
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "portability_test_user",
+                "email": "portability@test.com",
+                "password": _TEST_PASSWORD,
+            },
+        )
+    assert resp.status_code == 201, f"Registration failed: {resp.text}"
+    user_data = resp.json()
+    return {
+        "user_id": user_data["id"],
+        "username": user_data["username"],
+        "email": user_data["email"],
+        "password": _TEST_PASSWORD,
+    }
 
 
-@pytest.fixture()
-def sample_salt() -> bytes:
-    """Provide a deterministic 16-byte salt for tests."""
-    return b"test_salt_16b!!"
+@pytest_asyncio.fixture()
+async def auth_headers(client, registered_user) -> dict:
+    """
+    Логинится через API и возвращает заголовки с Bearer-токеном.
+    """
+    login_resp = await client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": registered_user["username"],
+            "password": registered_user["password"],
+        },
+    )
+    assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
+    token_data = login_resp.json()
+    return {"Authorization": f"Bearer {token_data['access_token']}"}

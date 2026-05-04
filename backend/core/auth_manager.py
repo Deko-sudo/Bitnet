@@ -455,8 +455,9 @@ class AuthManager:
             yield subkey
         finally:
             zero_memory(master_key)
-            if "subkey" in dir():
-                zero_memory(subkey)
+            subkey_ref = locals().get("subkey")
+            if subkey_ref is not None:
+                zero_memory(subkey_ref)
 
     def _get_provider_key(self) -> bytearray:
         """Resolve and validate provider key for ephemeral mode operations."""
@@ -474,65 +475,6 @@ class AuthManager:
                 f"master_key_provider returned invalid key length: expected {self._crypto.config.key_size}"
             )
         return key_buffer
-
-    def get_master_key(self) -> bytearray:
-        """
-        Get copy of master key for cryptographic operations.
-
-        DEPRECATED: Use `with_master_key()` context manager instead.
-        This method returns a copy that the caller must zero manually.
-
-        Returns:
-            Copy of master key as bytearray (32 bytes)
-
-        Raises:
-            AlreadyLockedError: If session is locked
-
-        Important:
-            Caller is responsible for zeroing the returned key after use!
-            Use zero_memory() to securely erase the key.
-
-        Example:
-            >>> key = auth.get_master_key()
-            >>> try:
-            ...     encrypted = crypto.encrypt(data, bytes(key))
-            ... finally:
-            ...     zero_memory(key)
-        """
-        with self._lock:
-            with self.with_master_key() as master_key:
-                # Return a copy as bytearray for secure zeroing by caller.
-                return bytearray(master_key)
-
-    def get_derived_key(self, context: bytes) -> bytearray:
-        """
-        Get derived subkey for specific purpose.
-
-        DEPRECATED: Use `with_derived_key()` context manager instead.
-        This method returns a copy that the caller must zero manually.
-
-        Args:
-            context: Context for key derivation (e.g., b"encryption")
-
-        Returns:
-            Derived subkey as bytearray (32 bytes)
-
-        Raises:
-            AlreadyLockedError: If session is locked
-
-        Important:
-            Caller is responsible for zeroing the returned key after use!
-
-        Example:
-            >>> enc_key = auth.get_derived_key(b"encryption")
-            >>> try:
-            ...     encrypted = crypto.encrypt(data, bytes(enc_key))
-            ... finally:
-            ...     zero_memory(enc_key)
-        """
-        with self._lock:
-            with self.with_derived_key(context) as subkey:
-                return bytearray(subkey)
 
     # ==========================================================================
     # Auto-Lock Timer

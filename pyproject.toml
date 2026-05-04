@@ -1,3 +1,15 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "bitnet-crypto-rs"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+
 [tool.black]
 line-length = 100
 target-version = ['py311']
@@ -7,6 +19,9 @@ minversion = "7.4"
 addopts = "-ra -q --cov=backend --cov-report=term-missing"
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
+markers = [
+    "fast_leak_check: Fast memory leak checks using mocks (no real crypto/DB)",
+]
 
 [tool.mypy]
 python_version = "3.11"

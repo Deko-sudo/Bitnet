@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\core\crypto_core.py
+# hypothesis_version: 6.151.13
+
+[b'bitnet:local:v1:hkdf-salt', 8192, 'AuthenticationError', 'B', 'Ciphertext too short', 'CryptoCore', 'CryptoError', 'DecryptionError', 'EncryptionError', 'KeyDerivationError', 'MemoryGuard', 'quick_decrypt', 'quick_encrypt', 'rb', 'utf-8', 'zero_memory']

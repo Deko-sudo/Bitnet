@@ -1,21 +1,112 @@
-version: "3.9"
+# ===========================================================================
+# BitNet — Production Docker Compose
+# ===========================================================================
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose down           # Stop all services
+#   docker compose logs -f app    # Follow app logs
+#   docker compose exec app bash  # Shell into container
+# ===========================================================================
 
 services:
-  bitnet-api:
+  # =========================================================================
+  # Main BitNet Application (FastAPI + Rust Bridge)
+  # =========================================================================
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: bitnet_server
-    restart: always
-    ports:
-      - "8000:8000"
+      target: production
+    container_name: bitnet-app
+    restart: unless-stopped
+    expose:
+      - "8000"
     volumes:
-      # Защищенный вольюм для персистентности SQLite базы
-      - ./data:/app/data
+      # Persistent SQLite database
+      - bitnet-data:/app/data
+    secrets:
+      # Server wrap key for FIDO2 double-wrap strategy
+      - server_key
     environment:
-      # Переопределение базы в примонтированную директорию
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - BITNET_SERVER_WRAP_KEY_FILE=/run/secrets/server_key
       - SQLALCHEMY_DATABASE_URL=sqlite:////app/data/bitnet.db
-      - DEBUG=False
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+    networks:
+      - bitnet-network
 
+  # =========================================================================
+  # Caddy Reverse Proxy (Automatic HTTPS)
+  # =========================================================================
+  proxy:
+    image: caddy:2-alpine
+    container_name: bitnet-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Caddy configuration
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddy data (certificates, etc.)
+      - caddy_data:/data
+      # Caddy config cache
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+    networks:
+      - bitnet-network
+
+# =========================================================================
+# Secrets Management
+# =========================================================================
+secrets:
+  server_key:
+    file: ./secrets/server_key.txt # Must contain 32 random bytes (base64 or raw)
+
+# =========================================================================
+# Networks
+# =========================================================================
+networks:
+  bitnet-network:
+    driver: bridge
+    name: bitnet-network
+
+# =========================================================================
+# Volumes
+# =========================================================================
 volumes:
-  bitnet_data:
+  bitnet-data:
+    driver: local
+    name: bitnet-data
+  caddy_data:
+    driver: local
+    name: bitnet-caddy-data
+  caddy_config:
+    driver: local
+    name: bitnet-caddy-config

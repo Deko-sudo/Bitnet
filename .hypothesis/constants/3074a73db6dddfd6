@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\database\db_security.py
+# hypothesis_version: 6.151.13
+
+[384, 448, '$env:USERNAME', '-Command', '-NoProfile', 'USERNAME', 'powershell']

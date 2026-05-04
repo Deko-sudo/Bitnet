@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\database\session.py
+# hypothesis_version: 6.151.13
+
+[':memory:', 'DATABASE_URL', 'check_same_thread', 'connect', 'nt', 'sqlite', 'sqlite+aiosqlite']

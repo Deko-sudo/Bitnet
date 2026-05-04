@@ -19,6 +19,10 @@ from typing import Dict, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import IntEnum
 
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timezone, timedelta
+from backend.database.models import LoginAttempt
 from .config import RateLimitConfig, PasswordStrengthConfig
 
 
@@ -287,6 +291,25 @@ class RateLimiter:
         with self._lock:
             if identifier in self._storage:
                 del self._storage[identifier]
+
+async def check_and_record_attempt(db: AsyncSession, success: bool, window_minutes: int = 15, max_failures: int = 5) -> bool:
+    """
+    Check if an attempt is allowed, and record it in the database.
+    Rate limit blocks after `max_failures` recent failed attempts.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+    stmt = select(func.count()).where(
+        LoginAttempt.attempted_at >= cutoff,
+        LoginAttempt.success == False
+    )
+    failures = await db.scalar(stmt)
+    
+    if failures >= max_failures:
+        return False  # Blocked
+    
+    db.add(LoginAttempt(success=success))
+    await db.commit()
+    return True
 
 
 # =============================================================================

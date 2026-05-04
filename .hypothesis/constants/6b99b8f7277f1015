@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\core\audit_logger.py
+# hypothesis_version: 6.151.13
+
+[100, 101, 102, 103, 255, '127.0.0.1', '::1', 'AuditEvent', 'AuditLog', 'AuditLogger', 'Base', 'EventType', 'Max depth exceeded', '[REDACTED]', '_error', 'action', 'after', 'audit_log', 'auth', 'create', 'created_at', 'credential', 'delete', 'details', 'event_type', 'event_type_name', 'id', 'ip_address', 'key', 'localhost', 'log_data_access', 'log_login_attempt', 'log_security_event', 'passwd', 'password', 'private', 'read', 'resource_id', 'resource_type', 'secret', 'success', 'timestamp', 'token', 'update', 'user_id']

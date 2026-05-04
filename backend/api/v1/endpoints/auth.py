@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+"""
+Authentication endpoints — Zero-Trust, Rust-backed crypto.
+
+* Passwords are never stored or kept as Python ``str`` longer than necessary.
+* The master key is decrypted into a ``LockedBuffer`` and threaded through
+  every request that requires encryption/decryption.
+* Session tokens are SHA-256 hashes of cryptographically random secrets.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -6,38 +15,40 @@ import hmac
 import os
 import secrets
 from dataclasses import dataclass
-from typing import Generator
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, EmailStr, SecretStr
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from pydantic import BaseModel, EmailStr, SecretStr
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.crypto_bridge import LockedBuffer, bridge, zeroize_mutable_buffer
-from backend.core.encryption_helper import EncryptionHelper
 from backend.database.models import User
 from backend.database.session import get_db
 
 router = APIRouter()
 
 
+# ---------------------------------------------------------------------------
+# Request / response schemas
+# ---------------------------------------------------------------------------
+
+
 class UserRegisterSchema(BaseModel):
     username: str
     email: EmailStr
-    password: SecretStr  # Zero-Trust constraint
+    password: SecretStr
 
 
 class UserLoginSchema(BaseModel):
     username: str
-    password: SecretStr  # Zero-Trust constraint
+    password: SecretStr
 
 
 class UserResponse(BaseModel):
     id: int
     username: str
-    email: EmailStr
-
-    model_config = ConfigDict(from_attributes=True)
+    email: str
 
 
 class LoginResponse(BaseModel):
@@ -47,148 +58,257 @@ class LoginResponse(BaseModel):
     username: str
 
 
-@dataclass
-class RequestCryptoContext:
+# ---------------------------------------------------------------------------
+# Crypto context — threaded through every protected endpoint
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CryptoContext:
+    """Carries the decrypted master key for the lifetime of one request.
+
+    The ``master_key`` is a Rust-managed ``LockedBuffer`` that resides in
+    non-pageable, mlock'd memory.  It **must** be closed when the request
+    finishes (handled by ``get_current_user``).
+    """
+
     user_id: int
+    username: str
     master_key: LockedBuffer
 
-    def duplicate_key(self) -> LockedBuffer:
-        return self.master_key.duplicate()
+
+# ---------------------------------------------------------------------------
+# Low-level crypto helpers
+# ---------------------------------------------------------------------------
 
 
-def _server_wrap_key_path() -> str:
-    wrap_key_path = os.getenv("BITNET_SERVER_WRAP_KEY_FILE")
-    if not wrap_key_path:
-        raise RuntimeError("BITNET_SERVER_WRAP_KEY_FILE is not configured")
-    return wrap_key_path
+def _derive_password_hash(password_buf: bytearray, salt: bytes) -> str:
+    """Derive an Argon2 hash for password verification.
 
+    The ``password_buf`` is **always** zeroized before this function returns,
+    regardless of success or failure.
 
-def _read_secret_file(path: str) -> bytearray:
-    file_size = os.path.getsize(path)
-    if file_size <= 0:
-        raise RuntimeError(f"Secret file {path} is empty")
-
-    out = bytearray(file_size)
-    with open(path, "rb", buffering=0) as handle:
-        bytes_read = handle.readinto(out)
-
-    if bytes_read != file_size:
-        zeroize_mutable_buffer(out)
-        raise RuntimeError(f"Expected {file_size} bytes from {path}, received {bytes_read}")
-
-    return out
-
-
-def _load_server_wrap_key() -> LockedBuffer:
-    wrap_key_bytes = _read_secret_file(_server_wrap_key_path())
+    Returns
+    -------
+    hex-encoded SHA-256 digest of the Argon2 output (used as DB password_hash).
+    """
+    derived: LockedBuffer | None = None
     try:
-        return bridge.lock_bytes(wrap_key_bytes, wipe_input=True)
-    finally:
-        zeroize_mutable_buffer(wrap_key_bytes)
-
-
-def _derive_login_hash(password: SecretStr | str, salt: bytes) -> str:
-    password_value = password.get_secret_value() if isinstance(password, SecretStr) else password
-    password_buf = bytearray(password_value.encode("utf-8"))
-    derived = bridge.argon2_derive_key(password_buf, salt, wipe_password=True)
-    try:
+        derived = bridge.argon2_derive_key(password_buf, salt, wipe_password=True)
         derived_bytes = bridge.locked_buffer_to_bytearray(derived)
         try:
             return hashlib.sha256(derived_bytes).hexdigest()
         finally:
             zeroize_mutable_buffer(derived_bytes)
     finally:
-        derived.close()
+        if derived is not None:
+            derived.close()
 
 
-def _unwrap_master_key(user: User) -> LockedBuffer:
-    wrap_key = _load_server_wrap_key()
+def _load_server_wrap_key() -> LockedBuffer:
+    """Load the server-side wrap key from the configured file.
+
+    The file must contain raw key bytes (typically 32 bytes).  The raw file
+    contents are read directly into a ``bytearray`` and wiped immediately
+    after being locked by the bridge.
+
+    Raises
+    ------
+    RuntimeError
+        If ``BITNET_SERVER_WRAP_KEY_FILE`` is not set or the file is empty.
+    """
+    wrap_key_path = os.getenv("BITNET_SERVER_WRAP_KEY_FILE")
+    if not wrap_key_path:
+        raise RuntimeError(
+            "BITNET_SERVER_WRAP_KEY_FILE environment variable is not set"
+        )
+
+    file_size = os.path.getsize(wrap_key_path)
+    if file_size <= 0:
+        raise RuntimeError(f"Wrap key file is empty: {wrap_key_path}")
+
+    raw = bytearray(file_size)
+    with open(wrap_key_path, "rb", buffering=0) as fh:
+        read = fh.readinto(raw)
+    if read != file_size:
+        zeroize_mutable_buffer(raw)
+        raise RuntimeError(f"Short read from wrap key file: {read} != {file_size}")
+
     try:
+        return bridge.lock_bytes(raw, wipe_input=True)
+    finally:
+        zeroize_mutable_buffer(raw)
+
+
+def _unwrap_master_key_for_user(user: User) -> LockedBuffer:
+    """Decrypt the user's wrapped master key using the server wrap key.
+
+    This is the gate between authentication and data access.  If decryption
+    fails (corrupted data, wrong server key, tampered DB), the caller must
+    treat it as an authentication failure — **fail closed**.
+
+    Returns
+    -------
+    LockedBuffer containing the user's 32-byte master key.
+
+    Raises
+    ------
+    HTTPException(401)
+        If the wrapped key cannot be decrypted.
+    """
+    server_key: LockedBuffer | None = None
+    try:
+        server_key = _load_server_wrap_key()
         return bridge.aes_gcm_decrypt(
-            wrap_key,
+            server_key,
             user.wrapped_master_key_cipher,
             user.wrapped_master_key_nonce,
             user.wrapped_master_key_tag,
         )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unable to decrypt master key — access denied",
+        )
     finally:
-        wrap_key.close()
+        if server_key is not None:
+            server_key.close()
+
+
+# ---------------------------------------------------------------------------
+# Token extraction
+# ---------------------------------------------------------------------------
 
 
 def _extract_bearer_token(request: Request) -> bytearray:
+    """Pull the raw token bytes from the Authorization header.
+
+    Returns a ``bytearray`` so it can be zeroized after hashing.
+    """
     for header_name, header_value in request.scope.get("headers", []):
         if header_name.lower() != b"authorization":
             continue
         if not header_value.lower().startswith(b"bearer "):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authorization header must be Bearer token",
+                detail="Authorization header must use the Bearer scheme",
             )
         return bytearray(header_value[7:])
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authorization header is required",
+        detail="Missing Authorization header",
     )
 
 
-def get_request_crypto_context(
+# ---------------------------------------------------------------------------
+# FastAPI dependency — the single source of auth for all protected routes
+# ---------------------------------------------------------------------------
+
+
+async def get_current_user(
     request: Request,
-    db: Session = Depends(get_db),
-) -> Generator[RequestCryptoContext, None, None]:
+    db: AsyncSession = Depends(get_db),
+) -> AsyncGenerator[CryptoContext, None]:
+    """Authenticate the bearer token and yield a ``CryptoContext``.
+
+    Flow
+    ----
+    1. Extract Bearer token from request headers.
+    2. SHA-256 hash the token → look up ``User`` by ``session_token_hash``.
+    3. Decrypt (unwrap) the user's master key with the server wrap key.
+    4. Yield ``CryptoContext(user_id, username, master_key)``.
+    5. **Always** close the master key in ``finally``, even on errors.
+
+    Raises
+    ------
+    HTTPException(401)
+        Invalid/missing token or unable to decrypt master key.
+    """
+    # 1. Extract and hash token
     token_buf = _extract_bearer_token(request)
     try:
         token_hash = hashlib.sha256(token_buf).hexdigest()
     finally:
         zeroize_mutable_buffer(token_buf)
 
-    user = db.query(User).filter(User.session_token_hash == token_hash).first()
-    if not user:
+    # 2. Look up user
+    stmt = select(User).where(User.session_token_hash == token_hash)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid bearer token",
+            detail="Invalid or expired bearer token",
         )
 
-    master_key = _unwrap_master_key(user)
+    # 3. Unwrap master key (fail-closed on error)
+    master_key = _unwrap_master_key_for_user(user)
+
+    # 4–5. Yield and guarantee cleanup
     try:
-        yield RequestCryptoContext(user_id=user.id, master_key=master_key)
+        yield CryptoContext(
+            user_id=user.id,
+            username=user.username,
+            master_key=master_key,
+        )
     finally:
         master_key.close()
 
 
-def get_user_context(
-    context: RequestCryptoContext = Depends(get_request_crypto_context),
-) -> tuple[int, EncryptionHelper]:
-    helper = EncryptionHelper(key_provider=context.duplicate_key)
-    return context.user_id, helper
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(user_data: UserRegisterSchema, db: Session = Depends(get_db)) -> UserResponse:
-    existing_user = db.query(User).filter(
+@router.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register(
+    data: UserRegisterSchema,
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """Register a new user with Argon2 password hashing and encrypted master key."""
+
+    # Check uniqueness
+    stmt = select(User).where(
         or_(
-            User.username == user_data.username,
-            User.email == str(user_data.email),
+            User.username == data.username,
+            User.email == str(data.email),
         )
-    ).first()
-    if existing_user:
+    )
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
+    if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="User with same username or email already exists",
+            detail="Username or email already registered",
         )
 
+    # Derive login password hash
     salt = secrets.token_bytes(16)
-    password_hash = _derive_login_hash(user_data.password, salt)
-    master_key = bridge.generate_random_locked(32)
-    wrap_key = _load_server_wrap_key()
+    password_buf = bytearray(data.password.get_secret_value().encode("utf-8"))
     try:
-        envelope = bridge.aes_gcm_encrypt(wrap_key, master_key, wipe_plaintext=False)
+        password_hash = _derive_password_hash(password_buf, salt)
     finally:
-        wrap_key.close()
+        zeroize_mutable_buffer(password_buf)
+
+    # Generate and wrap the user's master key with the server wrap key
+    master_key = bridge.generate_random_locked(32)
+    server_key: LockedBuffer | None = None
+    try:
+        server_key = _load_server_wrap_key()
+        envelope = bridge.aes_gcm_encrypt(server_key, master_key, wipe_plaintext=False)
+    finally:
+        if server_key is not None:
+            server_key.close()
         master_key.close()
 
     user = User(
-        username=user_data.username,
-        email=str(user_data.email),
+        username=data.username,
+        email=str(data.email),
         password_hash=password_hash,
         salt=salt,
         wrapped_master_key_cipher=envelope.ciphertext,
@@ -197,34 +317,60 @@ def register(user_data: UserRegisterSchema, db: Session = Depends(get_db)) -> Us
         session_token_hash=None,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
-    return UserResponse.model_validate(user)
+    await db.commit()
+    await db.refresh(user)
+
+    return UserResponse(id=user.id, username=user.username, email=user.email)
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(credentials: UserLoginSchema, db: Session = Depends(get_db)) -> LoginResponse:
-    user = db.query(User).filter(User.username == credentials.username).first()
-    if not user:
+async def login(
+    creds: UserLoginSchema,
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
+    """Authenticate with username/password and receive a bearer token.
+
+    Flow
+    ----
+    1. Fetch ``User`` by username (constant-time dummy hash if not found).
+    2. Derive Argon2 key from the provided password + stored salt.
+    3. Compare derived hash with stored ``password_hash`` (constant-time).
+    4. Decrypt the wrapped master key to verify it is still valid (fail-closed).
+    5. Generate a random session token, store its SHA-256 hash in the DB.
+    6. Return the plaintext token to the client.
+    """
+    stmt = select(User).where(User.username == creds.username)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if user is None:
+        # Constant-time: derive a dummy hash to avoid timing-based user enumeration
+        _derive_password_hash(bytearray(b"dummy"), secrets.token_bytes(16))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
 
-    candidate_hash = _derive_login_hash(credentials.password, user.salt)
+    # Derive and compare password hash
+    password_buf = bytearray(creds.password.get_secret_value().encode("utf-8"))
+    try:
+        candidate_hash = _derive_password_hash(password_buf, user.salt)
+    finally:
+        zeroize_mutable_buffer(password_buf)
+
     if not hmac.compare_digest(candidate_hash, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
 
-    # Fail closed if the wrapped master key blob is not decryptable.
-    master_key = _unwrap_master_key(user)
-    master_key.close()
+    # Verify the master key is decryptable before issuing a session (fail-closed)
+    mk = _unwrap_master_key_for_user(user)
+    mk.close()
 
+    # Issue session token
     token = secrets.token_urlsafe(32)
     user.session_token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    db.commit()
+    await db.commit()
 
     return LoginResponse(
         access_token=token,

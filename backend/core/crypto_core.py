@@ -12,27 +12,31 @@ Author: Nikita (BE1)
 Version: 2.0
 """
 
-import secrets
+import ctypes
 import hashlib
 import hmac
-import ctypes
-from typing import Optional, Any, Literal, Union
+import secrets
+from typing import Any, Literal, Optional, Union
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from argon2.low_level import Type, hash_secret_raw
 from cryptography.exceptions import InvalidTag
-
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from pydantic import SecretStr
-from argon2.low_level import hash_secret_raw, Type
 
 from .config import (
     CryptoConfig,
-    get_crypto_config,
-    RateLimitConfig,
     PasswordStrengthConfig,
+    RateLimitConfig,
+    get_crypto_config,
 )
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+HKDF_DOMAIN_SALT = b"bitnet:local:v1:hkdf-salt"
 
 
 # =============================================================================
@@ -93,32 +97,28 @@ def zero_memory(data: Union[bytearray, memoryview]) -> None:
         GC generations, and OS pagefiles may retain copies of key
         material. This function is best-effort protection against
         casual memory dumps.
-
-    Example:
-        >>> key = bytearray(secret_key)
-        >>> # ... use key ...
-        >>> zero_memory(key)
     """
     if isinstance(data, memoryview):
         if not data.contiguous:
             raise ValueError("memoryview must be contiguous")
-        buf = bytearray(data)
-        length = len(buf)
+        mv = data.cast("B")
+        length = len(mv)
+        if length == 0:
+            return
+        buf_type = ctypes.c_char * length
+        buf_ref = buf_type.from_buffer(mv)
+        ctypes.memset(ctypes.addressof(buf_ref), 0, length)
     elif isinstance(data, bytearray):
         length = len(data)
-        buf = data
+        if length == 0:
+            return
+        buf_type = ctypes.c_char * length
+        buf_ref = buf_type.from_buffer(data)
+        ctypes.memset(ctypes.addressof(buf_ref), 0, length)
     else:
         raise TypeError(
             "data must be bytearray or memoryview, not " + type(data).__name__
         )
-
-    if length == 0:
-        return
-
-    # Overwrite underlying C buffer directly for stronger guarantees.
-    buf_type = ctypes.c_char * length
-    buf_ref = buf_type.from_buffer(buf)
-    ctypes.memset(ctypes.addressof(buf_ref), 0, length)
 
 
 class MemoryGuard:
@@ -220,7 +220,9 @@ class CryptoCore:
 
         return secrets.token_bytes(length)
 
-    def derive_master_key(self, password: Union[SecretStr, str], salt: Union[bytes, bytearray]) -> bytearray:
+    def derive_master_key(
+        self, password: Union[SecretStr, str], salt: Union[bytes, bytearray]
+    ) -> SecureMemoryBuffer:
         """
         Derive master key from password using Argon2id.
 
@@ -246,7 +248,9 @@ class CryptoCore:
             >>> salt = crypto.generate_salt()
             >>> master_key = crypto.derive_master_key("my_password", salt)
         """
-        password_str = password.get_secret_value() if isinstance(password, SecretStr) else password
+        password_str = (
+            password.get_secret_value() if isinstance(password, SecretStr) else password
+        )
         if not password_str:
             raise ValueError("Password cannot be empty")
 
@@ -255,8 +259,10 @@ class CryptoCore:
 
         password_bytes = bytearray(password_str.encode("utf-8"))
         try:
+            # Use memoryview to pass buffer without copying
+            password_view = memoryview(password_bytes)
             key = hash_secret_raw(
-                secret=bytes(password_bytes),
+                secret=password_view,
                 salt=bytes(salt),
                 time_cost=self._config.argon2_time_cost,
                 memory_cost=self._config.argon2_memory_cost,
@@ -264,13 +270,17 @@ class CryptoCore:
                 hash_len=self._config.argon2_hash_len,
                 type=Type.ID,  # Argon2id (hybrid)
             )
-            return bytearray(key)
+            buf = SecureMemoryBuffer(len(key))
+            buf.write(key)
+            return buf
         except Exception as e:
             raise KeyDerivationError(f"Failed to derive key: {e}")
         finally:
             zero_memory(password_bytes)
 
-    def derive_subkey(self, master_key: Union[bytes, bytearray], context: bytes) -> bytearray:
+    def derive_subkey(
+        self, master_key: Union[bytes, bytearray], context: bytes
+    ) -> bytearray:
         """
         Derive subkey from master key using HKDF.
 
@@ -300,7 +310,7 @@ class CryptoCore:
             hkdf = HKDF(
                 algorithm=hashes.SHA256(),
                 length=self._config.key_size,
-                salt=None,
+                salt=HKDF_DOMAIN_SALT,
                 info=context,
             )
             return bytearray(hkdf.derive(bytes(master_key)))
@@ -311,7 +321,9 @@ class CryptoCore:
     # Encryption Methods
     # ==========================================================================
 
-    def encrypt(self, plaintext: Union[bytes, bytearray], key: Union[bytes, bytearray]) -> bytearray:
+    def encrypt(
+        self, plaintext: Union[bytes, bytearray], key: Union[bytes, bytearray]
+    ) -> bytearray:
         """
         Encrypt data using AES-256-GCM.
 
@@ -347,7 +359,9 @@ class CryptoCore:
         except Exception as e:
             raise EncryptionError(f"Encryption failed: {e}")
 
-    def decrypt(self, ciphertext: Union[bytes, bytearray], key: Union[bytes, bytearray]) -> bytearray:
+    def decrypt(
+        self, ciphertext: Union[bytes, bytearray], key: Union[bytes, bytearray]
+    ) -> bytearray:
         """
         Decrypt data using AES-256-GCM.
 
@@ -532,7 +546,9 @@ class CryptoCore:
 # =============================================================================
 
 
-def quick_encrypt(plaintext: Union[bytes, bytearray], password: Union[str, SecretStr]) -> bytearray:
+def quick_encrypt(
+    plaintext: Union[bytes, bytearray], password: Union[str, SecretStr]
+) -> bytearray:
     """
     Quick encryption with password.
 
@@ -556,7 +572,9 @@ def quick_encrypt(plaintext: Union[bytes, bytearray], password: Union[str, Secre
         zero_memory(key)
 
 
-def quick_decrypt(ciphertext: Union[bytes, bytearray], password: Union[str, SecretStr]) -> bytearray:
+def quick_decrypt(
+    ciphertext: Union[bytes, bytearray], password: Union[str, SecretStr]
+) -> bytearray:
     """
     Quick decryption with password.
 

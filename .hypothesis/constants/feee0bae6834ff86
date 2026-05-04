@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\api\v1\endpoints\entries.py
+# hypothesis_version: 6.151.13
+
+['/', '/{entry_id}', 'notes', 'notes_cipher', 'notes_nonce', 'password', 'password_cipher', 'password_nonce', 'title', 'title_cipher', 'title_nonce', 'url', 'url_cipher', 'url_nonce', 'username', 'username_cipher', 'username_nonce', 'utf-8']

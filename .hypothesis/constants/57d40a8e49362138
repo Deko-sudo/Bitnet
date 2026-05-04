@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\core\crypto_bridge.py
+# hypothesis_version: 6.151.13
+
+['B', 'ciphertext', 'data', 'master_pwd', 'nonce', 'plaintext', 'salt', 'tag', 'title', 'value']

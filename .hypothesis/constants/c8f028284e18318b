@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\api\v1\endpoints\auth.py
+# hypothesis_version: 6.151.13
+
+[b'authorization', b'bearer ', b'dummy', '/login', '/register', 'Invalid credentials', 'bearer', 'headers', 'rb', 'utf-8']

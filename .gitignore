@@ -30,6 +30,9 @@ htmlcov/
 *.sqlite
 
 # Secrets
+secrets/
+*.key
+server_key.txt
 .env
 *.key
 *.pem
@@ -39,4 +42,6 @@ secrets/
 .DS_Store
 Thumbs.db
 
-problems.md
+check-error.md
+
+.qwen

@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\database\schemas.py
+# hypothesis_version: 6.151.13
+
+['notes', 'password', 'title', 'url', 'username']

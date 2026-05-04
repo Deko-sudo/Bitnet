@@ -1,23 +1,33 @@
 # -*- coding: utf-8 -*-
 """Security Configuration via Pydantic"""
 
+import tomllib
+from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 from functools import lru_cache
 
+def _load_local_config() -> dict[str, int]:
+    config_path = Path.home() / ".bitnet" / "config.toml"
+    if config_path.exists():
+        with open(config_path, "rb") as f:
+            return tomllib.load(f)
+    return {}
+
+_local = _load_local_config()
 
 class CryptoConfig(BaseModel):
     """Cryptographic parameters configuration."""
 
-    key_size: int = Field(default=32, ge=16, le=64)
-    nonce_size: int = Field(default=12, ge=12, le=16)
-    tag_size: int = Field(default=16, ge=12, le=16)
+    key_size: int = Field(default=_local.get("key_size", 32), ge=16, le=64)
+    nonce_size: int = Field(default=_local.get("nonce_size", 12), ge=12, le=16)
+    tag_size: int = Field(default=_local.get("tag_size", 16), ge=12, le=16)
 
-    argon2_time_cost: int = Field(default=3, ge=1)
-    argon2_memory_cost: int = Field(default=65536, ge=1024)
-    argon2_parallelism: int = Field(default=4, ge=1)
-    argon2_hash_len: int = Field(default=32, ge=16)
-    argon2_salt_len: int = Field(default=16, ge=8)
+    argon2_time_cost: int = Field(default=_local.get("argon2_time_cost", 3), ge=1)
+    argon2_memory_cost: int = Field(default=_local.get("argon2_memory_cost", 65536), ge=1024)
+    argon2_parallelism: int = Field(default=_local.get("argon2_parallelism", 4), ge=1)
+    argon2_hash_len: int = Field(default=_local.get("argon2_hash_len", 32), ge=16)
+    argon2_salt_len: int = Field(default=_local.get("argon2_salt_len", 16), ge=8)
     argon2_type: Literal["i", "d", "id"] = "id"
 
     hmac_algorithm: Literal["sha256", "sha384", "sha512"] = "sha256"

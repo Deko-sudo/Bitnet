@@ -48,7 +48,7 @@ class TOTPAuthenticator:
     # TOTP configuration
     TIME_STEP = 30  # 30 seconds
     CODE_DIGITS = 6
-    HASH_ALGORITHM = 'sha1'
+    HASH_ALGORITHM = 'sha256'
     
     def __init__(self):
         """Initialize TOTP authenticator."""
@@ -117,41 +117,42 @@ class TOTPAuthenticator:
         self,
         secret: str,
         code: str,
+        last_used_counter: int,
         window: int = 1,
         timestamp: Optional[float] = None,
-    ) -> bool:
+    ) -> tuple[bool, int]:
         """
-        Verify TOTP code with time window.
+        Verify TOTP code with time window and replay protection.
         
         Args:
             secret: Base32-encoded secret key
             code: Code to verify
+            last_used_counter: Previous successful counter from database
             window: Number of time steps to check before/after (default 1)
             timestamp: Optional timestamp
         
         Returns:
-            True if code is valid
-        
-        Example:
-            >>> is_valid = totp.verify(secret, "123456")
-            >>> if is_valid:
-            ...     print("Code valid!")
+            Tuple of (is_valid, counter_used)
         """
         if timestamp is None:
             timestamp = time.time()
         
         current_counter = int(timestamp // self.TIME_STEP)
         
-        # Check current and adjacent time steps
         for offset in range(-window, window + 1):
             counter = current_counter + offset
+            
+            # Replay protection
+            if counter <= last_used_counter:
+                continue
+                
             secret_bytes = self._base32_decode(secret)
             expected_code = self._generate_hotp(secret_bytes, counter)
             
             if hmac.compare_digest(code, expected_code):
-                return True
+                return True, counter
         
-        return False
+        return False, last_used_counter
     
     def _generate_hotp(self, secret: bytes, counter: int) -> str:
         """
@@ -167,8 +168,8 @@ class TOTPAuthenticator:
         # Pack counter as 8-byte big-endian
         counter_bytes = struct.pack('>Q', counter)
         
-        # Generate HMAC-SHA1
-        hmac_hash = hmac.new(secret, counter_bytes, hashlib.sha1).digest()
+        # Generate HMAC-SHA256
+        hmac_hash = hmac.new(secret, counter_bytes, hashlib.sha256).digest()
         
         # Dynamic truncation
         offset = hmac_hash[-1] & 0x0F
@@ -376,16 +377,20 @@ class RecoveryCodeManager:
         if user_id not in self._codes:
             return False
         
-        code_hash = self._hash_code(code)
-        
-        if code_hash not in self._codes[user_id]:
+        # We need to iterate over stored hashes and use Argon2 verify
+        valid_code_hash = None
+        recovery_code = None
+        for code_hash, rc in self._codes[user_id].items():
+            if rc.used:
+                continue
+            if self._verify_code_hash(code, code_hash):
+                valid_code_hash = code_hash
+                recovery_code = rc
+                break
+                
+        if not valid_code_hash or not recovery_code:
             return False
-        
-        recovery_code = self._codes[user_id][code_hash]
-        
-        if recovery_code.used:
-            return False
-        
+            
         # Mark as used
         recovery_code.used = True
         recovery_code.used_at = time.time()
@@ -424,8 +429,19 @@ class RecoveryCodeManager:
         return '-'.join(groups)
     
     def _hash_code(self, code: str) -> str:
-        """Hash recovery code for secure storage."""
-        return hashlib.sha256(code.encode()).hexdigest()
+        """Hash recovery code for secure storage via Argon2id."""
+        from argon2 import PasswordHasher
+        ph = PasswordHasher(time_cost=1, memory_cost=65536, parallelism=2)
+        return ph.hash(code)
+        
+    def _verify_code_hash(self, code: str, code_hash: str) -> bool:
+        from argon2 import PasswordHasher
+        from argon2.exceptions import VerifyMismatchError
+        ph = PasswordHasher(time_cost=1, memory_cost=65536, parallelism=2)
+        try:
+            return ph.verify(code_hash, code)
+        except VerifyMismatchError:
+            return False
 
 
 # =============================================================================

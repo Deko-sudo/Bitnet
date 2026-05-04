@@ -1,87 +1,100 @@
 # -*- coding: utf-8 -*-
 """
-Password History Manager - Отслеживание истории паролей.
+Password History Manager — Fully asynchronous, Zero-Trust compliant.
 
-Архитектурный выбор (Zero-Trust):
-Хранение истории паролей не должно ослаблять общую защиту пользователя. В данном
-сервисе исторические пароли возвращаются клиенту исключительно через Pydantic `SecretStr`.
-Реализовано обязательное аппаратное затирание буферов (bytearray) в `finally`.
+Decrypts archived password ciphertexts using the real crypto pipeline:
+    PasswordHistory.password_cipher + password_nonce
+    → decrypt_entry_data(key) → LockedBuffer → bytearray → SecretStr
+    → zero_memory(bytearray) + LockedBuffer.close()
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, SecretStr, ConfigDict
-from backend.database.models import PasswordHistory
-from backend.core.encryption_helper import EncryptionHelper
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, SecretStr
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.core.crypto_bridge import LockedBuffer
 from backend.core.crypto_core import zero_memory
+from backend.core.encryption_helper import (
+    decrypt_entry_data,
+)
+from backend.database.models import PasswordHistory
+
+# ===========================================================================
+# Schemas
+# ===========================================================================
+
 
 class HistoryResponseSchema(BaseModel):
-    """Схема ответа для отдельной записи исторического пароля."""
+    """Один архивный пароль из истории."""
+
     id: int
     entry_id: int
     password: SecretStr
-    reason: str | None
+    reason: Optional[str] = None
     created_at: datetime
-
     model_config = ConfigDict(from_attributes=True)
 
+
+# ===========================================================================
+# Service
+# ===========================================================================
+
+
 class PasswordHistoryManager:
-    """Сервис для доступа к архиву старых паролей записи."""
-    
-    def __init__(self, session: Session, encryption_helper: EncryptionHelper):
+    """Async-сервис для чтения архива старых паролей записи."""
+
+    def __init__(self, session: AsyncSession):
         self.session = session
-        self.encryption_helper = encryption_helper
 
-    def add_old_password(self, entry_id: int, old_password: str | SecretStr, reason: str = "Пароль изменен") -> PasswordHistory:
-        """
-        [Устаревший метод] 
-        Резервный метод для явного шифрования сырого сохраненного текста.
-        Обычно используется прямой копипаст cipher/nonce из БД внутри entry_service 
-        (см. update_entry), чтобы не нагружать процессор и не открывать текст.
-        """
-        with self.encryption_helper._operation_key() as key:
-            cipher_hex, nonce_hex = self.encryption_helper._encrypt_text_field(old_password, key)
-            
-            history_record = PasswordHistory(
-                entry_id=entry_id,
-                password_cipher=cipher_hex,
-                password_nonce=nonce_hex,
-                reason=reason
-            )
-            self.session.add(history_record)
-            self.session.commit()
-            return history_record
-
-    def get_history(self, entry_id: int) -> list[HistoryResponseSchema]:
+    async def get_history_async(
+        self, entry_id: int, master_key: LockedBuffer
+    ) -> list[HistoryResponseSchema]:
         """
         Возвращает историю старых паролей записи в хронологическом убывании.
-        Строго соблюден паттерн Memory Safety при расшифровке.
-        """
-        records = self.session.query(PasswordHistory).filter(
-            PasswordHistory.entry_id == entry_id
-        ).order_by(PasswordHistory.created_at.desc()).all()
 
-        history_responses = []
-        with self.encryption_helper._operation_key() as key:
-            for record in records:
+        Каждая запись расшифровывается через реальный крипто-пайплайн,
+        а plaintext немедленно обнуляется.
+        """
+        stmt = (
+            select(PasswordHistory)
+            .where(PasswordHistory.entry_id == entry_id)
+            .order_by(PasswordHistory.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        records = result.scalars().all()
+
+        history_responses: list[HistoryResponseSchema] = []
+        for record in records:
+            locked: LockedBuffer | None = None
+            try:
+                locked = decrypt_entry_data(
+                    master_key,
+                    record.password_cipher,
+                    record.password_nonce,
+                )
+                pw_bytes = bytearray(len(locked))
+                locked.copy_into(pw_bytes)
                 try:
-                    # Расшифровываем в мутабельный буфер
-                    pass_bytes = self.encryption_helper._decrypt_text_field(
-                        record.password_cipher, record.password_nonce, key
-                    )
-                    # Упаковываем в безопасную модель
-                    pass_sec = SecretStr(pass_bytes.decode('utf-8'))
-                    history_responses.append(
-                        HistoryResponseSchema(
-                            id=record.id,
-                            entry_id=record.entry_id,
-                            password=pass_sec,
-                            reason=record.reason,
-                            created_at=record.created_at
-                        )
-                    )
+                    pw_str = pw_bytes.decode("utf-8")
                 finally:
-                    # ZERO-TRUST: строго стираем восстановленный старый пароль из ОЗУ на каждой итерации
-                    zero_memory(pass_bytes)
-                    
+                    zero_memory(pw_bytes)
+
+                history_responses.append(
+                    HistoryResponseSchema(
+                        id=record.id,
+                        entry_id=record.entry_id,
+                        password=SecretStr(pw_str),
+                        reason=record.reason,
+                        created_at=record.created_at,
+                    )
+                )
+            finally:
+                if locked is not None:
+                    locked.close()
+
         return history_responses

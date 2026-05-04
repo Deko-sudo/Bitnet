@@ -1,0 +1,4 @@
+# file: C:\Users\yakomori\AppData\Roaming\Python\Python314\site-packages\argon2\low_level.py
+# hypothesis_version: 6.151.13
+
+['ARGON2_VERSION', 'Type', 'ascii', 'char[]', 'ffi', 'hash_secret', 'hash_secret_raw', 'uint8_t[]', 'verify_secret']

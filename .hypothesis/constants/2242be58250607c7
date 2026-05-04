@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\api\v1\endpoints\trash.py
+# hypothesis_version: 6.151.13
+
+[404, '/', '/{entry_id}/purge', '/{entry_id}/restore', 'message', 'utf-8']

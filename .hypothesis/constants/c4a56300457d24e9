@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\api\v1\endpoints\portability.py
+# hypothesis_version: 6.151.13
+
+['/export/csv', '/export/jsonl', '/import/csv', '/import/jsonl', 'Content-Disposition', 'File is empty', 'X-Accel-Buffering', 'application/x-ndjson', 'csv', 'no', 'text/csv', 'utf-8']

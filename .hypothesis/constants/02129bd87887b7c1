@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\core\config.py
+# hypothesis_version: 6.151.13
+
+[40.0, 60.0, 300, 1024, 1800, 65536, '.bitnet', 'argon2_hash_len', 'argon2_memory_cost', 'argon2_parallelism', 'argon2_salt_len', 'argon2_time_cost', 'config.toml', 'd', 'forbid', 'i', 'id', 'key_size', 'nonce_size', 'rb', 'sha256', 'sha384', 'sha512', 'tag_size']

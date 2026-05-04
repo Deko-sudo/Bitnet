@@ -1,273 +1,304 @@
 # -*- coding: utf-8 -*-
 """
-Entry Service - CRUD operations for Password Entries.
+Async entry service for encrypted vault records.
 
-Архитектурный выбор (SQLAlchemy 2.0 + Zero-Trust):
-- Экземпляр Session не кэшируется глобально, так как он не thread-safe. Ожидается, что
-  сессия будет создаваться через Context Manager на уровне API request (Dependency Injection в FastAPI).
-- Вся работа с памятью и преобразования строгих `SecretStr` в raw-байты сопровождается
-  блоками `finally: zero_memory()`, предотвращая засорение кучи CPython открытыми текстами.
-- Реализована связка split-схемы моделей SQLAlchemy (`_cipher` и `_nonce`) без ORM-магии,
-  явно инициализируя колонки БД.
+This service is intentionally aligned with the Rust-backed crypto bridge:
+callers provide a request-scoped ``LockedBuffer`` master key and every field
+operation goes through ``backend.core.encryption_helper`` pure functions.
 """
 
-from datetime import datetime, timezone
+from __future__ import annotations
+
+import hashlib
+import hmac
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from pydantic import SecretStr
-from sqlalchemy.orm import Session
-from sqlalchemy.orm.exc import StaleDataError
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.crypto_core import zero_memory
+from backend.core.crypto_bridge import LockedBuffer, bridge, zeroize_mutable_buffer
 from backend.core.encryption_helper import (
-    EncryptionHelper,
-    EntryFieldsEncrypted,
-    EntryFieldsRaw,
+    decrypt_entry_data,
+    encrypt_all_entry_fields,
+    encrypt_entry_data,
+    generate_search_index,
 )
-from backend.database.models import PasswordEntry
+from backend.database.models import PasswordEntry, User
 from backend.database.schemas import (
     EntryCreateSchema,
+    EntryResponseRaw,
     EntryResponseSchema,
     EntryUpdateSchema,
 )
 
 
 class EntryNotFoundError(Exception):
-    """Исключение, если запись не найдена или уделена (Trash)."""
-
-    pass
+    """Raised when a requested entry does not exist or is soft-deleted."""
 
 
 class EntryConflictError(Exception):
     """Raised when optimistic concurrency detects a stale update."""
 
-    pass
+
+def _secret_to_bytearray(value: SecretStr | str) -> bytearray:
+    raw_value = value.get_secret_value() if isinstance(value, SecretStr) else value
+    return bytearray(raw_value.encode("utf-8"))
+
+
+def _derive_login_hash(password: str, salt: bytes) -> str:
+    password_buf = bytearray(password.encode("utf-8"))
+    derived: LockedBuffer | None = None
+    try:
+        derived = bridge.argon2_derive_key(password_buf, salt, wipe_password=True)
+        derived_bytes = bridge.locked_buffer_to_bytearray(derived)
+        try:
+            return hashlib.sha256(derived_bytes).hexdigest()
+        finally:
+            zeroize_mutable_buffer(derived_bytes)
+    finally:
+        zeroize_mutable_buffer(password_buf)
+        if derived is not None:
+            derived.close()
 
 
 class EntryService:
-    """Интерфейс для работы с зашифрованными записями в БД."""
+    """CRUD facade for ``PasswordEntry`` rows encrypted with a ``LockedBuffer`` key."""
 
-    def __init__(self, session: Session, encryption_helper: EncryptionHelper):
+    def __init__(self, session: AsyncSession, master_key: LockedBuffer):
         self.session = session
-        self.encryption_helper = encryption_helper
+        self.master_key = master_key
 
-    def create_entry(self, user_id: int, data: EntryCreateSchema) -> PasswordEntry:
-        """
-        Создает новую зашифрованную запись. Строгий Zero-Trust процесс.
-        """
-        raw_fields = EntryFieldsRaw(
-            title=data.title,
-            username=data.username,
-            password=data.password,
-            url=data.url,
-            notes=data.notes,
-        )
-
-        encrypted_fields = self.encryption_helper.encrypt_entry_fields(raw_fields)
-
-        blind_index_hex = None
-
-        with self.encryption_helper._operation_key() as key:
-            blind_index_hex = self.encryption_helper.generate_blind_index(
-                data.title, key
-            )
-
-        new_entry = PasswordEntry(
-            user_id=user_id,
-            title_search=blind_index_hex,
-            title_cipher=encrypted_fields.title_cipher,
-            title_nonce=encrypted_fields.title_nonce,
-            username_cipher=encrypted_fields.username_cipher,
-            username_nonce=encrypted_fields.username_nonce,
-            password_cipher=encrypted_fields.password_cipher,
-            password_nonce=encrypted_fields.password_nonce,
-            url_cipher=encrypted_fields.url_cipher,
-            url_nonce=encrypted_fields.url_nonce,
-            notes_cipher=encrypted_fields.notes_cipher,
-            notes_nonce=encrypted_fields.notes_nonce,
-        )
-
-        self.session.add(new_entry)
-        self.session.commit()
-        self.session.refresh(new_entry)
-
-        return new_entry
-
-    # Внимание: параметр `entry_id` типизирован как `int` в соответствии с вашей SQLAlchemy моделью `PasswordEntry`
-    # (id = mapped_column(Integer)). При необходимости использования UUID потребуется миграция БД.
-    def get_entry(self, user_id: int, entry_id: int) -> EntryResponseSchema:
-        """
-        Чтение записи (Read).
-        Извлекает запись и расшифровывает её, строго затирая мутабельные
-        буферы (bytearray) после упаковки в Pydantic `SecretStr`.
-        """
-        entry = (
-            self.session.query(PasswordEntry)
-            .filter(
-                PasswordEntry.id == entry_id,
+    async def list_entries_async(
+        self, user_id: int, skip: int = 0, limit: int = 100
+    ) -> list[PasswordEntry]:
+        stmt = (
+            select(PasswordEntry)
+            .where(
                 PasswordEntry.user_id == user_id,
-                PasswordEntry.is_deleted == False,
+                PasswordEntry.is_deleted == False,  # noqa: E712
             )
-            .first()
+            .offset(skip)
+            .limit(limit)
         )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
-        if not entry:
-            raise EntryNotFoundError(f"Entry {entry_id} not found or sent to trash.")
-
-        encrypted_fields = EntryFieldsEncrypted(
-            title_cipher=entry.title_cipher,
-            title_nonce=entry.title_nonce,
-            username_cipher=entry.username_cipher,
-            username_nonce=entry.username_nonce,
-            password_cipher=entry.password_cipher,
-            password_nonce=entry.password_nonce,
-            url_cipher=entry.url_cipher,
-            url_nonce=entry.url_nonce,
-            notes_cipher=entry.notes_cipher,
-            notes_nonce=entry.notes_nonce,
+    async def search_entries_async(
+        self, user_id: int, blind_index: str, skip: int = 0, limit: int = 100
+    ) -> list[PasswordEntry]:
+        stmt = (
+            select(PasswordEntry)
+            .where(
+                PasswordEntry.user_id == user_id,
+                PasswordEntry.is_deleted == False,  # noqa: E712
+                PasswordEntry.title_search == blind_index,
+            )
+            .offset(skip)
+            .limit(limit)
         )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
-        # helper вернет словарь, где все значения - это bytearray
-        decrypted_dict = self.encryption_helper.decrypt_entry_fields(encrypted_fields)
+    async def create_entry_async(self, user_id: int, data: EntryCreateSchema) -> PasswordEntry:
+        title_for_index = _secret_to_bytearray(data.title)
+        title_for_encrypt = _secret_to_bytearray(data.title)
+        password = _secret_to_bytearray(data.password)
+        username = _secret_to_bytearray(data.username) if data.username else None
+        url = _secret_to_bytearray(data.url) if data.url else None
+        notes = _secret_to_bytearray(data.notes) if data.notes else None
 
         try:
-            # Конвертируем bytearray в SecretStr для ResponseSchema
-            title_sec = SecretStr(decrypted_dict["title"].decode("utf-8"))
-            password_sec = SecretStr(decrypted_dict["password"].decode("utf-8"))
-
-            username_sec = (
-                SecretStr(decrypted_dict["username"].decode("utf-8"))
-                if decrypted_dict["username"]
-                else None
-            )
-            url_sec = (
-                SecretStr(decrypted_dict["url"].decode("utf-8"))
-                if decrypted_dict["url"]
-                else None
-            )
-            notes_sec = (
-                SecretStr(decrypted_dict["notes"].decode("utf-8"))
-                if decrypted_dict["notes"]
-                else None
-            )
-
-            return EntryResponseSchema(
-                id=entry.id,
-                user_id=entry.user_id,
-                title=title_sec,
-                username=username_sec,
-                password=password_sec,
-                url=url_sec,
-                notes=notes_sec,
-                created_at=entry.created_at,
-                updated_at=entry.updated_at,
+            blind_index = generate_search_index(self.master_key, title_for_index)
+            encrypted = encrypt_all_entry_fields(
+                self.master_key,
+                title=title_for_encrypt,
+                username=username,
+                password=password,
+                url=url,
+                notes=notes,
             )
         finally:
-            # CRITICAL ZERO-TRUST RAM CLEARING RULE:
-            # Итерируемся по словарю bytearray и принудительно обнуляем C-буферы (ctypes.memset).
-            # Мы обязаны сделать это в блоке finally, чтобы предотвратить оседание
-            # открытых текстов (паролей) в куче памяти в случае исключений Pydantic.
-            for field_name, byte_arr in decrypted_dict.items():
-                if byte_arr is not None:
-                    zero_memory(byte_arr)
+            for buf in (title_for_index, title_for_encrypt, password, username, url, notes):
+                if buf is not None:
+                    zeroize_mutable_buffer(buf)
 
-    def update_entry(
-        self, user_id: int, entry_id: int, update_data: EntryUpdateSchema
-    ) -> PasswordEntry:
-        """
-        Частичное обновление полей (Update). Пересчитывает слепой индекс при обновлении заголовка
-        и перешифровывает только измененные поля по отдельности (Partial updates / PATCH).
-        """
-        entry = (
-            self.session.query(PasswordEntry)
-            .filter(
-                PasswordEntry.id == entry_id,
-                PasswordEntry.user_id == user_id,
-                PasswordEntry.is_deleted == False,
-            )
-            .first()
+        entry = PasswordEntry(
+            user_id=user_id,
+            title_search=blind_index,
+            title_cipher=encrypted["title_cipher"],
+            title_nonce=encrypted["title_nonce"],
+            username_cipher=encrypted["username_cipher"],
+            username_nonce=encrypted["username_nonce"],
+            password_cipher=encrypted["password_cipher"],
+            password_nonce=encrypted["password_nonce"],
+            url_cipher=encrypted["url_cipher"],
+            url_nonce=encrypted["url_nonce"],
+            notes_cipher=encrypted["notes_cipher"],
+            notes_nonce=encrypted["notes_nonce"],
         )
+        self.session.add(entry)
+        await self.session.commit()
+        await self.session.refresh(entry)
+        return entry
 
-        if not entry:
-            raise EntryNotFoundError(f"Entry {entry_id} not found or sent to trash.")
+    async def update_entry_async(
+        self,
+        user_id: int,
+        entry_id: int,
+        update_data: EntryUpdateSchema,
+        client_updated_at: Optional[datetime] = None,
+    ) -> PasswordEntry:
+        entry = await self._fetch_active_entry(user_id, entry_id)
 
-        # exclude_unset гарантирует, что мы обновляем только те объекты, которые явно передал клиент
+        if client_updated_at is not None and entry.updated_at > client_updated_at:
+            raise EntryConflictError(f"Entry {entry_id} was modified after the client's last sync.")
+
         update_dict = update_data.model_dump(exclude_unset=True)
         if not update_dict:
             return entry
 
-        # Пересчитываем Blind Index, если изменили заголовок
-        if "title" in update_dict:
-            with self.encryption_helper._operation_key() as key:
-                blind_index_hex = self.encryption_helper.generate_blind_index(
-                    update_data.title,
-                    key,
-                )
-            entry.title_search = blind_index_hex
+        for field_name in ("title", "username", "password", "url", "notes"):
+            if field_name not in update_dict:
+                continue
 
-        # Сохранение старого пароля ПЕРЕД его заменой (Интеграция с PasswordHistoryManager)
-        # Архитектурное решение безопасности: мы не расшифровываем старый пароль,
-        # а просто копируем пару cipher/nonce. Ключ у юзера один и тот же!
-        if "password" in update_dict and getattr(update_data, "password") is not None:
-            from backend.database.models import PasswordHistory
+            new_value = getattr(update_data, field_name)
+            if new_value is None:
+                if field_name not in ("title", "password"):
+                    setattr(entry, f"{field_name}_cipher", None)
+                    setattr(entry, f"{field_name}_nonce", None)
+                continue
 
-            history_record = PasswordHistory(
-                entry_id=entry.id,
-                password_cipher=entry.password_cipher,
-                password_nonce=entry.password_nonce,
-                reason="Обновление пароля",
-            )
-            self.session.add(history_record)
+            plaintext = _secret_to_bytearray(new_value)
+            try:
+                cipher_hex, nonce_hex = encrypt_entry_data(self.master_key, plaintext)
+            finally:
+                zeroize_mutable_buffer(plaintext)
 
-        # Итерируемся по полям БД и перешифровываем порции (только те, которые затронуты в update_dict)
-        target_fields = ["title", "username", "password", "url", "notes"]
-        with self.encryption_helper._operation_key() as key:
-            for field in target_fields:
-                if field in update_dict:
-                    new_val_sec = getattr(update_data, field)
-                    if new_val_sec is not None:
-                        cipher_hex, nonce_hex = (
-                            self.encryption_helper._encrypt_text_field(new_val_sec, key)
-                        )
-                        setattr(entry, f"{field}_cipher", cipher_hex)
-                        setattr(entry, f"{field}_nonce", nonce_hex)
-                    else:
-                        # Обработка обнуления опционального поля
-                        if field not in ["title", "password"]:
-                            setattr(entry, f"{field}_cipher", None)
-                            setattr(entry, f"{field}_nonce", None)
+            setattr(entry, f"{field_name}_cipher", cipher_hex)
+            setattr(entry, f"{field_name}_nonce", nonce_hex)
 
-        try:
-            self.session.flush()
-            self.session.commit()
-        except StaleDataError as exc:
-            self.session.rollback()
-            raise EntryConflictError(
-                f"Entry {entry_id} was modified by another transaction."
-            ) from exc
+            if field_name == "title":
+                title_for_index = _secret_to_bytearray(new_value)
+                try:
+                    entry.title_search = generate_search_index(self.master_key, title_for_index)
+                finally:
+                    zeroize_mutable_buffer(title_for_index)
 
-        self.session.refresh(entry)
+        await self.session.commit()
+        await self.session.refresh(entry)
         return entry
 
-    def soft_delete_entry(self, user_id: int, entry_id: int) -> bool:
-        """
-        Мягкое удаление (Soft Delete).
-        Не стирает строку таблицы, а устанавливает флаг для механизма корзины.
-        """
-        entry = (
-            self.session.query(PasswordEntry)
-            .filter(
-                PasswordEntry.id == entry_id,
-                PasswordEntry.user_id == user_id,
-                PasswordEntry.is_deleted == False,
-            )
-            .first()
-        )
-
-        if not entry:
-            raise EntryNotFoundError(f"Entry {entry_id} not found or already in trash.")
-
+    async def delete_entry_async(self, user_id: int, entry_id: int) -> bool:
+        entry = await self._fetch_active_entry(user_id, entry_id)
         entry.is_deleted = True
         entry.deleted_at = datetime.now(timezone.utc)
-
-        self.session.commit()
+        await self.session.commit()
         return True
+
+    async def get_entry_raw_async(self, user_id: int, entry_id: int) -> EntryResponseRaw:
+        entry = await self._fetch_active_entry(user_id, entry_id)
+
+        title = self._decrypt_to_bytearray(entry.title_cipher, entry.title_nonce)
+        password = self._decrypt_to_bytearray(entry.password_cipher, entry.password_nonce)
+        username = self._decrypt_optional(entry.username_cipher, entry.username_nonce)
+        url = self._decrypt_optional(entry.url_cipher, entry.url_nonce)
+        notes = self._decrypt_optional(entry.notes_cipher, entry.notes_nonce)
+
+        return EntryResponseRaw(
+            id=entry.id,
+            user_id=entry.user_id,
+            title=title,
+            username=username,
+            password=password,
+            url=url,
+            notes=notes,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
+        )
+
+    async def get_entry_response_async(self, user_id: int, entry_id: int) -> EntryResponseSchema:
+        raw = await self.get_entry_raw_async(user_id, entry_id)
+        try:
+            return EntryResponseSchema(
+                id=raw.id,
+                user_id=raw.user_id,
+                title=SecretStr(raw.title.decode("utf-8")),
+                username=(SecretStr(raw.username.decode("utf-8")) if raw.username else None),
+                password=SecretStr(raw.password.decode("utf-8")),
+                url=SecretStr(raw.url.decode("utf-8")) if raw.url else None,
+                notes=SecretStr(raw.notes.decode("utf-8")) if raw.notes else None,
+                created_at=raw.created_at,
+                updated_at=raw.updated_at,
+            )
+        finally:
+            raw.wipe()
+
+    async def purge_deleted_entries_async(self, user_id: int, older_than_days: int = 30) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        stmt = delete(PasswordEntry).where(
+            PasswordEntry.user_id == user_id,
+            PasswordEntry.is_deleted == True,  # noqa: E712
+            PasswordEntry.deleted_at <= cutoff,
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return int(result.rowcount or 0)
+
+    async def change_master_password_async(
+        self,
+        user_id: int,
+        old_password: str,
+        new_password: str,
+    ) -> None:
+        """
+        Update the login verifier without re-encrypting vault entries.
+
+        In the current server-wrap architecture, vault rows are encrypted with
+        the persisted user master key. The user's password is only a login
+        verifier, so changing it must update ``salt`` and ``password_hash``.
+        """
+        stmt = select(User).where(User.id == user_id)
+        result = await self.session.execute(stmt)
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise ValueError("User not found.")
+
+        old_hash = _derive_login_hash(old_password, user.salt)
+        if not hmac.compare_digest(old_hash, user.password_hash):
+            raise ValueError("Old password is incorrect.")
+
+        new_salt = secrets.token_bytes(16)
+        user.salt = new_salt
+        user.password_hash = _derive_login_hash(new_password, new_salt)
+        await self.session.commit()
+
+    async def _fetch_active_entry(self, user_id: int, entry_id: int) -> PasswordEntry:
+        stmt = select(PasswordEntry).where(
+            PasswordEntry.id == entry_id,
+            PasswordEntry.user_id == user_id,
+            PasswordEntry.is_deleted == False,  # noqa: E712
+        )
+        result = await self.session.execute(stmt)
+        entry = result.scalar_one_or_none()
+        if entry is None:
+            raise EntryNotFoundError(f"Entry {entry_id} not found.")
+        return entry
+
+    def _decrypt_to_bytearray(self, cipher_hex: str, nonce_hex: str) -> bytearray:
+        locked: LockedBuffer | None = None
+        try:
+            locked = decrypt_entry_data(self.master_key, cipher_hex, nonce_hex)
+            return bridge.locked_buffer_to_bytearray(locked)
+        finally:
+            if locked is not None:
+                locked.close()
+
+    def _decrypt_optional(
+        self, cipher_hex: Optional[str], nonce_hex: Optional[str]
+    ) -> Optional[bytearray]:
+        if cipher_hex is None or nonce_hex is None:
+            return None
+        return self._decrypt_to_bytearray(cipher_hex, nonce_hex)

@@ -1,0 +1,4 @@
+# file: C:\Users\yakomori\AppData\Roaming\Python\Python314\site-packages\pyasn1\type\useful.py
+# hypothesis_version: 6.151.13
+
+[3600, '%.2d%.2d', '%Y%m%d%H%M%S', '%y%m%d%H%M%S', '+', ',', '-', '.', '.%06d', '0', '00', '0000', '?', 'GeneralizedTime', 'ObjectDescriptor', 'UTC', 'UTCTime', 'Z']

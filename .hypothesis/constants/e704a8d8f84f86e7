@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\main.py
+# hypothesis_version: 6.151.13
+
+['/api/v1/auth', '/api/v1/entries', '/api/v1/fido2', '/api/v1/trash', '/health', '1.0.0', 'Auth', 'BitNet API', 'Entries', 'FIDO2/WebAuthn', 'System', 'Trash', 'api_logger', 'http', 'message', 'ok', 'startup', 'status', 'unknown']

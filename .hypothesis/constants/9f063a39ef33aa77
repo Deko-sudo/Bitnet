@@ -1,0 +1,4 @@
+# file: C:\Users\yakomori\AppData\Roaming\Python\Python314\site-packages\webauthn\helpers\verify_safetynet_timestamp.py
+# hypothesis_version: 6.151.13
+
+[1000, 'Payload has expired']

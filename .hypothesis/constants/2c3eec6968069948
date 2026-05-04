@@ -1,0 +1,4 @@
+# file: D:\BitNet\backend\database\models.py
+# hypothesis_version: 6.151.13
+
+[255, '0', '1', 'PasswordEntry', 'User', 'attempted_at', 'entries', 'history', 'ix_login_attempts_at', 'login_attempts', 'password_entries', 'password_entries.id', 'password_history', 'recovery_codes', 'user', 'users', 'users.id', 'version_id_col', 'webauthn_credentials']

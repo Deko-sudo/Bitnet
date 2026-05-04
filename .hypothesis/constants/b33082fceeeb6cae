@@ -1,0 +1,4 @@
+# file: C:\Users\yakomori\AppData\Roaming\Python\Python314\site-packages\webauthn\helpers\__init__.py
+# hypothesis_version: 6.151.13
+
+['aaguid_to_string', 'base64url_to_bytes', 'bytes_to_base64url', 'byteslike_to_bytes', 'encode_cbor', 'generate_challenge', 'generate_user_handle', 'hash_by_alg', 'options_to_json', 'options_to_json_dict', 'parse_backup_flags', 'parse_cbor', 'verify_signature']
