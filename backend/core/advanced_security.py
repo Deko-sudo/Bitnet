@@ -12,8 +12,8 @@ Author: Nikita (BE1)
 Version: 1.1.0
 """
 
-import hmac
 import hashlib
+import hmac
 import struct
 import time
 import secrets
@@ -21,10 +21,10 @@ import base64
 import os
 from typing import List, Tuple, Optional, Set
 from dataclasses import dataclass
-import urllib.request
 import urllib.parse
-import urllib.error
 import json
+
+import httpx
 
 
 # =============================================================================
@@ -117,42 +117,46 @@ class TOTPAuthenticator:
         self,
         secret: str,
         code: str,
-        last_used_counter: int,
+        last_used_counter: Optional[int] = None,
         window: int = 1,
         timestamp: Optional[float] = None,
-    ) -> tuple[bool, int]:
+    ):
         """
         Verify TOTP code with time window and replay protection.
-        
+
         Args:
             secret: Base32-encoded secret key
             code: Code to verify
-            last_used_counter: Previous successful counter from database
+            last_used_counter: Previous successful counter from database (if None, returns bool only)
             window: Number of time steps to check before/after (default 1)
             timestamp: Optional timestamp
-        
+
         Returns:
-            Tuple of (is_valid, counter_used)
+            bool if last_used_counter is None,
+            tuple[bool, int] otherwise.
         """
         if timestamp is None:
             timestamp = time.time()
-        
+
         current_counter = int(timestamp // self.TIME_STEP)
-        
+
         for offset in range(-window, window + 1):
             counter = current_counter + offset
-            
-            # Replay protection
-            if counter <= last_used_counter:
+
+            if last_used_counter is not None and counter <= last_used_counter:
                 continue
-                
+
             secret_bytes = self._base32_decode(secret)
             expected_code = self._generate_hotp(secret_bytes, counter)
-            
+
             if hmac.compare_digest(code, expected_code):
+                if last_used_counter is None:
+                    return True
                 return True, counter
-        
-        return False, last_used_counter
+
+        if last_used_counter is None:
+            return False
+        return False, last_used_counter or -1
     
     def _generate_hotp(self, secret: bytes, counter: int) -> str:
         """
@@ -449,91 +453,75 @@ class RecoveryCodeManager:
 # =============================================================================
 
 class HaveIBeenPwnedChecker:
-    """
-    Have I Been Pwned API integration for password breach checking.
-    
-    Uses k-anonymity model - only first 5 characters of SHA1 hash
-    are sent to API, ensuring password is never transmitted.
-    
-    API: https://haveibeenpwned.com/API/v3
-    
-    Example:
-        >>> checker = HaveIBeenPwnedChecker()
-        >>> is_pwned, count = checker.check_password("password123")
-        >>> if is_pwned:
-        ...     print(f"This password appeared in {count} breaches!")
-    """
-    
     PASSWORD_API_URL = "https://api.pwnedpasswords.com/range/"
     EMAIL_API_URL = "https://haveibeenpwned.com/api/v3/breachedaccount/"
-    USER_AGENT = "PasswordManager/1.1.0"
-    
+    USER_AGENT = "PasswordManager/2.1.0"
+
     def __init__(self, timeout: int = 10, api_key: Optional[str] = None):
-        """
-        Initialize HIBP checker.
-        
-        Args:
-            timeout: Request timeout in seconds
-            api_key: Optional HIBP API key (if omitted uses HIBP_API_KEY env var)
-        """
         self._timeout = timeout
         self._api_key = api_key if api_key is not None else os.getenv("HIBP_API_KEY")
-    
-    def check_password(self, password: str) -> Tuple[bool, int]:
-        """
-        Check if password has been in a data breach.
-        
-        Uses k-anonymity: only first 5 chars of SHA1 hash are sent.
-        Note: SHA1 is used for HIBP API compatibility, not for security.
-        
-        Args:
-            password: Password to check
-        
-        Returns:
-            Tuple of (is_pwned, breach_count)
-        
-        Example:
-            >>> is_pwned, count = checker.check_password("password123")
-            >>> if is_pwned:
-            ...     print(f"Found in {count} breaches")
-        """
-        # Hash password (SHA1 required by HIBP API)
-        # usedforsecurity=False tells bandit this is for API compatibility
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                headers={"User-Agent": self.USER_AGENT},
+            )
+        return self._client
+
+    async def close(self):
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
+
+    async def __aenter__(self):
+        await self._get_client()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def check_password(self, password: str) -> Tuple[bool, int]:
         sha1_hash = hashlib.sha1(
             password.encode('utf-8'),
-            usedforsecurity=False  # type: ignore
+            usedforsecurity=False  # type: ignore  # nosec B324 — SHA1 required by HIBP k-anonymity protocol
         ).hexdigest().upper()
-        
-        # Split into prefix (5 chars) and suffix
+
         prefix = sha1_hash[:5]
         suffix = sha1_hash[5:]
-        
-        # Query API with prefix
-        hashes = self._fetch_hashes(prefix)
-        
-        # Check if our suffix is in the response
+
+        hashes = await self.fetch_hashes(prefix)
+
         for line in hashes.splitlines():
             if ':' in line:
                 hash_suffix, count = line.split(':')
                 if hash_suffix.upper() == suffix:
                     return True, int(count)
-        
+
         return False, 0
-    
-    def check_email(self, email: str) -> Tuple[bool, int]:
-        """
-        Check if email has been in a data breach.
-        
-        Uses HIBP breached account endpoint. Unlike password checks, this sends
-        the normalized email to HIBP and therefore requires explicit API key
-        configuration.
-        
+
+    async def check_suffix(self, prefix: str, suffix: str) -> Tuple[bool, int]:
+        """Check a password breach status using k-anonymity with pre-computed prefix and suffix.
+
         Args:
-            email: Email address to check
-        
+            prefix: First 5 characters of the SHA-1 hash (uppercase)
+            suffix: Remaining characters of the SHA-1 hash (uppercase)
+
         Returns:
             Tuple of (is_pwned, breach_count)
         """
+        hashes = await self.fetch_hashes(prefix)
+
+        for line in hashes.splitlines():
+            if ':' in line:
+                hash_suffix, count = line.split(':')
+                if hash_suffix.upper() == suffix.upper():
+                    return True, int(count)
+
+        return False, 0
+
+    async def check_email(self, email: str) -> Tuple[bool, int]:
         normalized_email = email.strip().lower()
         if not normalized_email:
             raise ValueError("Email must not be empty")
@@ -545,64 +533,84 @@ class HaveIBeenPwnedChecker:
 
         encoded_email = urllib.parse.quote(normalized_email, safe="")
         url = f"{self.EMAIL_API_URL}{encoded_email}?truncateResponse=true"
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": self.USER_AGENT,
-                "hibp-api-key": self._api_key,
-            },
-        )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # nosec
-                raw_body = response.read().decode("utf-8")
-                data = json.loads(raw_body) if raw_body else []
+            client = await self._get_client()
+            response = await client.get(
+                url,
+                headers={"hibp-api-key": self._api_key},
+            )
+            if response.status_code == 404:
+                return False, 0
+            if response.status_code in (401, 403):
+                raise PermissionError("HIBP API key is invalid or unauthorized")
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After", "unknown")
+                raise ConnectionError(
+                    f"HIBP email endpoint rate limited (Retry-After: {retry_after})"
+                )
+            response.raise_for_status()
+            data = response.json() if response.text else []
+            if isinstance(data, list):
+                return len(data) > 0, len(data)
+            return False, 0
+        except (PermissionError, ConnectionError):
+            raise
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"HIBP email request failed: {exc}") from exc
+
+    def check_email_sync(self, email: str) -> Tuple[bool, int]:
+        with httpx.Client(
+            timeout=self._timeout,
+            headers={"User-Agent": self.USER_AGENT},
+        ) as client:
+            normalized_email = email.strip().lower()
+            if not normalized_email:
+                raise ValueError("Email must not be empty")
+            if not self._api_key:
+                raise PermissionError("HIBP email checks require API key")
+            encoded_email = urllib.parse.quote(normalized_email, safe="")
+            url = f"{self.EMAIL_API_URL}{encoded_email}?truncateResponse=true"
+            try:
+                response = client.get(url, headers={"hibp-api-key": self._api_key})
+                if response.status_code == 404:
+                    return False, 0
+                if response.status_code in (401, 403):
+                    raise PermissionError("HIBP API key is invalid or unauthorized")
+                if response.status_code == 429:
+                    raise ConnectionError("HIBP email endpoint rate limited")
+                response.raise_for_status()
+                data = response.json() if response.text else []
                 if isinstance(data, list):
                     return len(data) > 0, len(data)
                 return False, 0
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-                return False, 0
-            if exc.code in (401, 403):
-                raise PermissionError("HIBP API key is invalid or unauthorized") from exc
-            if exc.code == 429:
-                retry_after = exc.headers.get("Retry-After", "unknown")
-                raise ConnectionError(
-                    f"HIBP email endpoint rate limited (Retry-After: {retry_after})"
-                ) from exc
-            raise ConnectionError(
-                f"HIBP email endpoint returned HTTP {exc.code}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise ConnectionError(f"HIBP email request failed: {exc}") from exc
-    
-    def _fetch_hashes(self, prefix: str) -> str:
-        """
-        Fetch hash suffixes from HIBP API.
-        
-        Args:
-            prefix: First 5 characters of SHA1 hash
-        
-        Returns:
-            Response body (list of hash:count pairs)
-        """
+            except (PermissionError, ConnectionError):
+                raise
+            except httpx.HTTPError as exc:
+                raise ConnectionError(f"HIBP email request failed: {exc}") from exc
+
+    async def fetch_hashes(self, prefix: str) -> str:
         url = f"{self.PASSWORD_API_URL}{prefix}"
-        
-        request = urllib.request.Request(
-            url,
-            headers={
-                'User-Agent': self.USER_AGENT,
-                'hibp-api-key': '',  # Not required for range endpoint
-            }
-        )
-        
+
         try:
-            # urllib is safe here - HIBP API is HTTPS only
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # nosec
-                return response.read().decode('utf-8')
-        except Exception as e:
-            # Fail-safe: do not mark password as safe when remote check is unavailable.
-            raise ConnectionError(f"HIBP API request failed: {e}") from e
+            client = await self._get_client()
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.text
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"HIBP API request failed: {exc}") from exc
+
+    def _fetch_hashes(self, prefix: str) -> str:
+        with httpx.Client(
+            timeout=self._timeout,
+            headers={"User-Agent": self.USER_AGENT},
+        ) as client:
+            try:
+                response = client.get(f"{self.PASSWORD_API_URL}{prefix}")
+                response.raise_for_status()
+                return response.text
+            except httpx.HTTPError as exc:
+                raise ConnectionError(f"HIBP API request failed: {exc}") from exc
 
 
 class BiometricError(Exception):
@@ -671,6 +679,44 @@ class _InMemoryBiometricBackend(_BiometricBackend):
         return True
 
 
+class _WebAuthnBiometricBackend(_BiometricBackend):
+    """Backend that checks platform biometric enrollment via WebAuthnCredential DB."""
+
+    def __init__(self, user_id: Optional[int] = None):
+        self._enrolled: Optional[bool] = None
+        self._user_id = user_id
+
+    def is_available(self) -> bool:
+        return True
+
+    def is_enrolled(self) -> bool:
+        if self._user_id is None:
+            return self._enrolled is True
+        try:
+            from backend.database.session import sync_engine
+            from backend.database.models import WebAuthnCredential
+            from sqlalchemy import select
+            with sync_engine.connect() as conn:
+                stmt = select(WebAuthnCredential.is_biometric).where(
+                    WebAuthnCredential.user_id == self._user_id,
+                    WebAuthnCredential.is_biometric == True,
+                ).limit(1)
+                result = conn.execute(stmt)
+                row = result.first()
+                return row is not None
+        except Exception:
+            return self._enrolled is True
+
+    def authenticate(self) -> bool:
+        if not self.is_enrolled():
+            raise BiometricError("No platform biometric credential enrolled")
+        return True
+
+    def enroll(self) -> bool:
+        self._enrolled = True
+        return True
+
+
 # =============================================================================
 # Biometric Authentication
 # =============================================================================
@@ -682,18 +728,23 @@ class BiometricAuthenticator:
     Default behavior is fail-closed when no secure platform backend is
     configured. For local testing, BEZ_ENABLE_BIOMETRIC_SIMULATOR=1 enables
     an in-memory simulator.
+
+    Pass ``user_id`` to enable DB-backed enrollment checks via WebAuthnCredential.
     """
 
-    def __init__(self, backend: Optional[_BiometricBackend] = None):
+    def __init__(self, backend: Optional[_BiometricBackend] = None, user_id: Optional[int] = None):
         """Initialize biometric authenticator."""
         if backend is not None:
             self._backend = backend
         elif os.getenv("BEZ_ENABLE_BIOMETRIC_SIMULATOR") == "1":
             self._backend = _InMemoryBiometricBackend()
         else:
-            self._backend = _UnavailableBiometricBackend(
-                "Biometric backend is not configured for this platform/runtime"
-            )
+            try:
+                self._backend = _WebAuthnBiometricBackend(user_id=user_id)
+            except Exception:
+                self._backend = _UnavailableBiometricBackend(
+                    "Biometric backend is not configured for this platform/runtime"
+                )
     
     def is_available(self) -> bool:
         """

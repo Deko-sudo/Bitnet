@@ -47,6 +47,7 @@ def db_session():
     session = Session()
     yield session
     session.close()
+    engine.dispose()
 
 
 @pytest.fixture
@@ -212,11 +213,11 @@ class TestAuditLogger:
             details={"password": "secret123"},
         )
         
-        # Reload from database
-        db_session.refresh(audit_log)
-        
+        # Reload from database via the test session
         import json
-        details = json.loads(audit_log.details)
+        reloaded = db_session.query(AuditLog).filter(AuditLog.id == audit_log.id).first()
+        assert reloaded is not None
+        details = json.loads(reloaded.details)
         assert details["password"] == "[REDACTED]"
     
     def test_get_log(self, audit_logger, db_session):

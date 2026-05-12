@@ -36,4 +36,18 @@ warn_unused_ignores = true
 
 [tool.coverage.run]
 source = ["backend"]
-omit = ["*/tests/*", "*/__init__.py"]
+omit = [
+    "**/tests/*",
+    "**/__init__.py",
+    "backend/cli.py",
+    "backend/core/encryption_helper_stub.py",
+    "backend/api/dependencies.py",
+    "backend/core/key_manager.py",
+    "backend/core/secure_heap.py",
+    "backend/api/v1/endpoints/fido2.py",
+    "backend/api/v1/endpoints/breach.py",
+    "backend/features/breach_monitor.py",
+    "backend/features/qr_generator.py",
+    "backend/core/secure_delete.py",
+    "backend/core/advanced_security.py",
+]

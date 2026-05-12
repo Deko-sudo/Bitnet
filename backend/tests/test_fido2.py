@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-FIDO2 / WebAuthn Double-Wrap Tests.
+FIDO2 / WebAuthn Double-Wrap Tests (v2.0.0+).
 
 Verifies that the **double-wrap** strategy works correctly:
     master_key ──AES-GCM(device_protector)──► wrapped_master_key_fido
@@ -24,7 +24,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.api.v1.endpoints.fido2 import (
-    _challenge_store,
+    _persist_challenge,
+    _consume_challenge,
     _store_device_credential,
     _unwrap_master_key_from_fido_credential,
 )
@@ -75,10 +76,14 @@ def _make_fake_credential() -> tuple[bytes, bytes]:
 # =============================================================================
 
 
+import pytest_asyncio
+
+
+@pytest.mark.asyncio
 class TestDoubleWrapUnwrap:
     """Test the core double-wrap / double-unwrap logic with real Rust bridge."""
 
-    def _create_test_user(self, db_session: Session, user_id: int) -> User:
+    async def _create_test_user(self, db_session, user_id: int):
         """Helper to create a minimal User for FK satisfaction."""
         import hashlib
         import secrets as _secrets
@@ -94,18 +99,18 @@ class TestDoubleWrapUnwrap:
             wrapped_master_key_tag=b"\x00" * 16,
         )
         db_session.add(user)
-        db_session.flush()
+        await db_session.flush()
         return user
 
-    def test_wrap_unwrap_roundtrip(self, db_session: Session):
+    async def test_wrap_unwrap_roundtrip(self, db_session):
         """Encrypt master_key with device_protector, then unwrap — must match."""
-        user = self._create_test_user(db_session, user_id=42)
+        user = await self._create_test_user(db_session, user_id=42)
         master_key = bridge.generate_random_locked(32)
         credential_id, cose_key = _make_fake_credential()
 
         try:
             # Store (double-wrap)
-            cred = _store_device_credential(
+            cred = await _store_device_credential(
                 db=db_session,
                 user_id=user.id,
                 credential_id=credential_id,
@@ -139,18 +144,18 @@ class TestDoubleWrapUnwrap:
         finally:
             master_key.close()
 
-    def test_different_devices_different_wraps(self, db_session: Session):
+    async def test_different_devices_different_wraps(self, db_session):
         """Two devices wrapping the same master key must produce different blobs."""
-        user = self._create_test_user(db_session, user_id=1)
+        user = await self._create_test_user(db_session, user_id=1)
         master_key = bridge.generate_random_locked(32)
         cred_id_1, cose_1 = _make_fake_credential()
         cred_id_2, cose_2 = _make_fake_credential()
 
         try:
-            cred1 = _store_device_credential(
+            cred1 = await _store_device_credential(
                 db_session, user.id, cred_id_1, cose_1, 0, master_key
             )
-            cred2 = _store_device_credential(
+            cred2 = await _store_device_credential(
                 db_session, user.id, cred_id_2, cose_2, 0, master_key
             )
 
@@ -176,16 +181,16 @@ class TestDoubleWrapUnwrap:
         finally:
             master_key.close()
 
-    def test_unwrap_fail_closed_on_corrupt_data(self, db_session: Session):
+    async def test_unwrap_fail_closed_on_corrupt_data(self, db_session):
         """Tampered credential must raise HTTPException(401), not crash."""
         from fastapi import HTTPException
 
-        user = self._create_test_user(db_session, user_id=2)
+        user = await self._create_test_user(db_session, user_id=2)
         master_key = bridge.generate_random_locked(32)
         cred_id, cose_key = _make_fake_credential()
 
         try:
-            cred = _store_device_credential(
+            cred = await _store_device_credential(
                 db_session, user.id, cred_id, cose_key, 0, master_key
             )
         finally:
@@ -206,19 +211,26 @@ class TestDoubleWrapUnwrap:
 # =============================================================================
 
 
+@pytest.mark.asyncio
 class TestFido2Registration:
     """Test FIDO2 registration endpoint with mocked webauthn verification."""
 
-    def test_register_verify_stores_credential(
+    async def test_register_verify_stores_credential(
         self, client, registered_user: dict, auth_headers: dict, db_session: Session
     ):
         """Full FIDO2 registration: options → verify → credential stored."""
         credential_id, cose_key = _make_fake_credential()
         challenge = secrets.token_bytes(32)
 
-        # Inject challenge
+        # Inject challenge via new async helper
         challenge_id = f"reg:{registered_user['user_id']}"
-        _challenge_store.put(challenge_id, challenge)
+        await _persist_challenge(
+            db_session,
+            challenge_id=challenge_id,
+            challenge=challenge,
+            purpose="registration",
+            user_id=registered_user["user_id"],
+        )
 
         # Build mock credential dict (what the browser would send)
         mock_credential = {
@@ -244,7 +256,7 @@ class TestFido2Registration:
                 sign_count=0,
             ),
         ):
-            resp = client.post(
+            resp = await client.post(
                 "/api/v1/fido2/register/verify",
                 json={"credential": mock_credential},
                 headers=auth_headers,
@@ -259,11 +271,12 @@ class TestFido2Registration:
         )
 
         # Verify credential is in DB
-        stored_cred = (
-            db_session.query(WebAuthnCredential)
-            .filter(WebAuthnCredential.credential_id == credential_id)
-            .first()
+        from sqlalchemy import select as _select
+        stmt = _select(WebAuthnCredential).where(
+            WebAuthnCredential.credential_id == credential_id
         )
+        result = await db_session.execute(stmt)
+        stored_cred = result.scalar_one_or_none()
         assert stored_cred is not None
         assert stored_cred.user_id == registered_user["user_id"]
         assert stored_cred.sign_count == 0
@@ -282,10 +295,11 @@ class TestFido2Registration:
 # =============================================================================
 
 
+@pytest.mark.asyncio
 class TestFido2Login:
     """Test FIDO2 login endpoint with mocked webauthn verification."""
 
-    def test_fido2_login_recovers_master_key(
+    async def test_fido2_login_recovers_master_key(
         self, client, registered_user: dict, auth_headers: dict, db_session: Session
     ):
         """Register a FIDO2 credential, then login with it."""
@@ -294,7 +308,13 @@ class TestFido2Login:
 
         # --- Step 1: Register the credential ---
         reg_challenge_id = f"reg:{registered_user['user_id']}"
-        _challenge_store.put(reg_challenge_id, challenge)
+        await _persist_challenge(
+            db_session,
+            challenge_id=reg_challenge_id,
+            challenge=challenge,
+            purpose="registration",
+            user_id=registered_user["user_id"],
+        )
 
         mock_credential = {
             "id": base64.urlsafe_b64encode(credential_id).rstrip(b"=").decode(),
@@ -318,7 +338,7 @@ class TestFido2Login:
                 sign_count=0,
             ),
         ):
-            resp = client.post(
+            resp = await client.post(
                 "/api/v1/fido2/register/verify",
                 json={"credential": mock_credential},
                 headers=auth_headers,
@@ -328,7 +348,13 @@ class TestFido2Login:
         # --- Step 2: FIDO2 Login ---
         login_challenge = secrets.token_bytes(32)
         login_challenge_id = secrets.token_urlsafe(16)
-        _challenge_store.put(f"login:{login_challenge_id}", login_challenge)
+        await _persist_challenge(
+            db_session,
+            challenge_id=f"login:{login_challenge_id}",
+            challenge=login_challenge,
+            purpose="login",
+            user_id=registered_user["user_id"],
+        )
 
         login_credential = {
             "id": base64.urlsafe_b64encode(credential_id).rstrip(b"=").decode(),
@@ -352,7 +378,7 @@ class TestFido2Login:
                 new_sign_count=1,
             ),
         ):
-            resp = client.post(
+            resp = await client.post(
                 "/api/v1/fido2/login/verify",
                 json={
                     "credential": login_credential,
@@ -372,7 +398,7 @@ class TestFido2Login:
         fido_headers = {"Authorization": f"Bearer {login_data['access_token']}"}
 
         # Create an encrypted entry with the FIDO2-issued token
-        resp = client.post(
+        resp = await client.post(
             "/api/v1/entries/",
             json={
                 "title": "FIDO2 Secured Entry",
@@ -392,7 +418,7 @@ class TestFido2Login:
 
         # Read it back
         entry_id = created["id"]
-        resp = client.get(f"/api/v1/entries/{entry_id}", headers=fido_headers)
+        resp = await client.get(f"/api/v1/entries/{entry_id}", headers=fido_headers)
         assert resp.status_code == 200
         fetched = resp.json()
         assert fetched["title"] == "FIDO2 Secured Entry"
@@ -404,16 +430,23 @@ class TestFido2Login:
 # =============================================================================
 
 
+@pytest.mark.asyncio
 class TestCredentialManagement:
     """List and delete FIDO2 credentials."""
 
-    def test_list_credentials(self, client, registered_user: dict, auth_headers: dict):
+    async def test_list_credentials(self, client, registered_user: dict, auth_headers: dict, db_session: Session):
         """List returns credentials for the authenticated user."""
         # Register a credential first
         credential_id, cose_key = _make_fake_credential()
         challenge = secrets.token_bytes(32)
         challenge_id = f"reg:{registered_user['user_id']}"
-        _challenge_store.put(challenge_id, challenge)
+        await _persist_challenge(
+            db_session,
+            challenge_id=challenge_id,
+            challenge=challenge,
+            purpose="registration",
+            user_id=registered_user["user_id"],
+        )
 
         mock_credential = {
             "id": base64.urlsafe_b64encode(credential_id).rstrip(b"=").decode(),
@@ -429,7 +462,7 @@ class TestCredentialManagement:
             "backend.api.v1.endpoints.fido2.verify_registration_response",
             return_value=FakeRegistration(credential_id, cose_key, 0),
         ):
-            resp = client.post(
+            resp = await client.post(
                 "/api/v1/fido2/register/verify",
                 json={"credential": mock_credential},
                 headers=auth_headers,
@@ -437,7 +470,7 @@ class TestCredentialManagement:
         assert resp.status_code == 201
 
         # List
-        resp = client.get("/api/v1/fido2/credentials", headers=auth_headers)
+        resp = await client.get("/api/v1/fido2/credentials", headers=auth_headers)
         assert resp.status_code == 200
         creds = resp.json()
         assert len(creds) >= 1
@@ -446,12 +479,18 @@ class TestCredentialManagement:
             == base64.urlsafe_b64encode(credential_id).rstrip(b"=").decode()
         )
 
-    def test_delete_credential(self, client, registered_user: dict, auth_headers: dict):
+    async def test_delete_credential(self, client, registered_user: dict, auth_headers: dict, db_session: Session):
         """Delete a credential and verify it's gone."""
         credential_id, cose_key = _make_fake_credential()
         challenge = secrets.token_bytes(32)
         challenge_id = f"reg:{registered_user['user_id']}"
-        _challenge_store.put(challenge_id, challenge)
+        await _persist_challenge(
+            db_session,
+            challenge_id=challenge_id,
+            challenge=challenge,
+            purpose="registration",
+            user_id=registered_user["user_id"],
+        )
 
         mock_credential = {
             "id": base64.urlsafe_b64encode(credential_id).rstrip(b"=").decode(),
@@ -467,7 +506,7 @@ class TestCredentialManagement:
             "backend.api.v1.endpoints.fido2.verify_registration_response",
             return_value=FakeRegistration(credential_id, cose_key, 0),
         ):
-            resp = client.post(
+            resp = await client.post(
                 "/api/v1/fido2/register/verify",
                 json={"credential": mock_credential},
                 headers=auth_headers,
@@ -476,13 +515,13 @@ class TestCredentialManagement:
 
         # Delete
         cred_b64 = base64.urlsafe_b64encode(credential_id).rstrip(b"=").decode()
-        resp = client.delete(
+        resp = await client.delete(
             f"/api/v1/fido2/credentials/{cred_b64}",
             headers=auth_headers,
         )
         assert resp.status_code == 204
 
         # Verify gone
-        resp = client.get("/api/v1/fido2/credentials", headers=auth_headers)
+        resp = await client.get("/api/v1/fido2/credentials", headers=auth_headers)
         assert resp.status_code == 200
         assert len(resp.json()) == 0

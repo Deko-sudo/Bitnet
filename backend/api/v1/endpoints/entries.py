@@ -32,11 +32,15 @@ from backend.core.encryption_helper import (
 )
 from backend.database.models import PasswordEntry, PasswordHistory
 from backend.database.schemas import (
+    EntryEnvelopeCreateSchema,
+    EntryEnvelopeResponseSchema,
+    EntryEnvelopeUpdateSchema,
     EntryCreateSchema,
     EntryListItemSchema,
     EntryResponseSchema,
     EntryUpdateSchema,
 )
+from backend.database.entry_service import EntryNotFoundError, EntryService
 from backend.database.session import get_db
 from backend.features.password_history_manager import HistoryResponseSchema
 
@@ -70,24 +74,29 @@ async def _fetch_active_entry(
     if entry is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Entry {entry_id} not found or has been deleted",
+            detail="Entry not found or has been deleted",
         )
     return entry
 
 
-def _locked_to_str(locked: LockedBuffer) -> str:
-    """Copy a ``LockedBuffer`` into a ``bytearray``, decode, and wipe."""
+def _locked_to_bytearray(locked: LockedBuffer) -> bytearray:
+    """Copy a ``LockedBuffer`` into a ``bytearray``. Caller MUST zeroize!"""
     buf = bytearray(len(locked))
     locked.copy_into(buf)
+    return buf
+
+
+def _locked_to_str(locked: LockedBuffer) -> str:
+    """Copy a ``LockedBuffer`` into a string. The bytearray is zeroized internally,
+    but the returned ``str`` is immutable and cannot be zeroized."""
+    buf = _locked_to_bytearray(locked)
     try:
         return buf.decode("utf-8")
     finally:
         zeroize_mutable_buffer(buf)
 
 
-def _read_entry_response(
-    entry: PasswordEntry, key: LockedBuffer
-) -> EntryResponseSchema:
+def _read_entry_response(entry: PasswordEntry, key: LockedBuffer) -> EntryResponseSchema:
     """Decrypt all fields of *entry* and pack into an ``EntryResponseSchema``.
 
     Every decrypted ``bytearray`` is zeroized in the ``finally`` block of
@@ -128,14 +137,8 @@ def _build_response_schema(
             id=entry.id,
             user_id=entry.user_id,
             title=SecretStr(title_buf.decode("utf-8")) if title_buf else SecretStr(""),
-            username=(
-                SecretStr(username_buf.decode("utf-8")) if username_buf else None
-            ),
-            password=(
-                SecretStr(password_buf.decode("utf-8"))
-                if password_buf
-                else SecretStr("")
-            ),
+            username=(SecretStr(username_buf.decode("utf-8")) if username_buf else None),
+            password=(SecretStr(password_buf.decode("utf-8")) if password_buf else SecretStr("")),
             url=SecretStr(url_buf.decode("utf-8")) if url_buf else None,
             notes=SecretStr(notes_buf.decode("utf-8")) if notes_buf else None,
             created_at=entry.created_at,
@@ -235,31 +238,45 @@ async def create_entry(
 @router.get("/", response_model=list[EntryListItemSchema])
 async def list_entries(
     query: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 100,
     db: AsyncSession = Depends(get_db),
     ctx: CryptoContext = Depends(get_current_user),
 ) -> list[EntryListItemSchema]:
-    """List metadata for all non-deleted entries.
+    """List metadata for non-deleted entries (paginated).
 
     If *query* is provided, search by blind HMAC index — only matching titles
     are returned.  Passwords are **never** decrypted in this endpoint.
     """
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     if query:
         query_buf = bytearray(query.encode("utf-8"))
         try:
             search_hmac = generate_search_index(ctx.master_key, query_buf)
         finally:
             zeroize_mutable_buffer(query_buf)
-        stmt = select(PasswordEntry).where(
-            PasswordEntry.user_id == ctx.user_id,
-            PasswordEntry.is_deleted == False,
-            PasswordEntry.title_search == search_hmac,
+        stmt = (
+            select(PasswordEntry)
+            .where(
+                PasswordEntry.user_id == ctx.user_id,
+                PasswordEntry.is_deleted == False,
+                PasswordEntry.title_search == search_hmac,
+            )
+            .offset(offset)
+            .limit(limit)
         )
         result = await db.execute(stmt)
         entries = list(result.scalars().all())
     else:
-        stmt = select(PasswordEntry).where(
-            PasswordEntry.user_id == ctx.user_id,
-            PasswordEntry.is_deleted == False,
+        stmt = (
+            select(PasswordEntry)
+            .where(
+                PasswordEntry.user_id == ctx.user_id,
+                PasswordEntry.is_deleted == False,
+            )
+            .offset(offset)
+            .limit(limit)
         )
         result = await db.execute(stmt)
         entries = list(result.scalars().all())
@@ -302,6 +319,114 @@ async def list_entries(
                 url_locked.close()
 
     return results
+
+
+# ===========================================================================
+# E2EE Pass-Through API — encrypted envelopes only
+# ===========================================================================
+
+
+def _entry_service(db: AsyncSession) -> EntryService:
+    return EntryService(db)
+
+
+def _entry_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Entry not found or has been deleted",
+    )
+
+
+@router.post(
+    "/e2ee",
+    response_model=EntryEnvelopeResponseSchema,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_e2ee_entry(
+    data: EntryEnvelopeCreateSchema,
+    db: AsyncSession = Depends(get_db),
+    ctx: CryptoContext = Depends(get_current_user),
+) -> EntryEnvelopeResponseSchema:
+    """Store a client-encrypted E2EE envelope without server-side crypto."""
+    service = _entry_service(db)
+    try:
+        entry = await service.create_entry_async(ctx.user_id, data)
+        return await service.get_entry_envelope_async(ctx.user_id, entry.id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid encrypted entry envelope",
+        ) from exc
+
+
+@router.get("/e2ee", response_model=list[EntryEnvelopeResponseSchema])
+async def list_e2ee_entries(
+    query: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    ctx: CryptoContext = Depends(get_current_user),
+) -> list[EntryEnvelopeResponseSchema]:
+    """List client-encrypted E2EE envelopes."""
+    service = _entry_service(db)
+    entries = (
+        await service.search_entries_async(ctx.user_id, query)
+        if query
+        else await service.list_entries_async(ctx.user_id)
+    )
+
+    result: list[EntryEnvelopeResponseSchema] = []
+    for entry in entries:
+        try:
+            result.append(service.to_envelope_response(entry))
+        except EntryNotFoundError:
+            continue
+    return result
+
+
+@router.get("/e2ee/{entry_id}", response_model=EntryEnvelopeResponseSchema)
+async def read_e2ee_entry(
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    ctx: CryptoContext = Depends(get_current_user),
+) -> EntryEnvelopeResponseSchema:
+    """Return one encrypted E2EE envelope without decrypting it."""
+    try:
+        return await _entry_service(db).get_entry_envelope_async(ctx.user_id, entry_id)
+    except EntryNotFoundError as exc:
+        raise _entry_not_found() from exc
+
+
+@router.patch("/e2ee/{entry_id}", response_model=EntryEnvelopeResponseSchema)
+async def update_e2ee_entry(
+    entry_id: int,
+    data: EntryEnvelopeUpdateSchema,
+    db: AsyncSession = Depends(get_db),
+    ctx: CryptoContext = Depends(get_current_user),
+) -> EntryEnvelopeResponseSchema:
+    """Replace or update metadata for a client-encrypted E2EE envelope."""
+    service = _entry_service(db)
+    try:
+        await service.update_entry_async(ctx.user_id, entry_id, data)
+        return await service.get_entry_envelope_async(ctx.user_id, entry_id)
+    except EntryNotFoundError as exc:
+        raise _entry_not_found() from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid encrypted entry envelope",
+        ) from exc
+
+
+@router.delete("/e2ee/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_e2ee_entry(
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    ctx: CryptoContext = Depends(get_current_user),
+) -> None:
+    """Soft-delete an E2EE envelope."""
+    try:
+        await _entry_service(db).delete_entry_async(ctx.user_id, entry_id)
+    except EntryNotFoundError as exc:
+        raise _entry_not_found() from exc
 
 
 # ===========================================================================

@@ -6,6 +6,7 @@ Coverage goal: >85%
 """
 
 import pytest
+import pytest_asyncio
 import time
 
 from backend.core.advanced_security import (
@@ -33,10 +34,11 @@ def recovery_manager():
     return RecoveryCodeManager()
 
 
-@pytest.fixture
-def hibp_checker():
-    """Create HIBP checker."""
-    return HaveIBeenPwnedChecker()
+@pytest_asyncio.fixture
+async def hibp_checker():
+    checker = HaveIBeenPwnedChecker()
+    yield checker
+    await checker.close()
 
 
 # =============================================================================
@@ -134,7 +136,7 @@ class TestTOTPAuthenticator:
         assert "otpauth://totp/TestApp:test@example.com" in uri
         assert f"secret={secret}" in uri
         assert "issuer=TestApp" in uri
-        assert "algorithm=SHA1" in uri
+        assert "algorithm=SHA256" in uri
         assert "digits=6" in uri
         assert "period=30" in uri
 
@@ -230,53 +232,29 @@ class TestRecoveryCodeManager:
 # =============================================================================
 
 class TestHaveIBeenPwnedChecker:
-    """Tests for HIBP checker."""
-    
-    def test_check_password_format(self, hibp_checker):
-        """Test password check returns correct format."""
-        # Test with any password - format check
-        is_pwned, count = hibp_checker.check_password("test_password_123")
-        
-        # Should return tuple
+    async def test_check_password_format(self, hibp_checker):
+        is_pwned, count = await hibp_checker.check_password("test_password_123")
         assert isinstance(is_pwned, bool)
         assert isinstance(count, int)
         assert count >= 0
     
     def test_check_password_k_anonymity(self, hibp_checker):
-        """Test that only hash prefix is sent."""
-        # This test verifies k-anonymity concept
-        # The actual password is never sent to API
         password = "test_password_123"
-        
-        # Generate hash
         import hashlib
-        sha1_hash = hashlib.sha1(password.encode()).hexdigest().upper()
+        sha1_hash = hashlib.sha1(password.encode()).hexdigest().upper()  # nosec B324
         prefix = sha1_hash[:5]
         suffix = sha1_hash[5:]
-        
-        # Only prefix should be in API call
-        # Suffix stays client-side
         assert len(prefix) == 5
         assert len(suffix) == 35
     
-    def test_check_unicode_password(self, hibp_checker):
-        """Test unicode password handling."""
-        password = "пароль123"
-        
-        is_pwned, count = hibp_checker.check_password(password)
-        
-        # Should work without errors
+    async def test_check_unicode_password(self, hibp_checker):
+        is_pwned, count = await hibp_checker.check_password("пароль123")
         assert isinstance(is_pwned, bool)
         assert isinstance(count, int)
     
-    def test_check_unique_password_offline(self, hibp_checker):
-        """Test unique password handling (offline test)."""
-        # Very unique password (unlikely to be in breaches)
+    async def test_check_unique_password_offline(self, hibp_checker):
         unique_password = "xK9#mP2$vL5@nQ8"
-        
-        # Just test it doesn't crash
-        is_pwned, count = hibp_checker.check_password(unique_password)
-        
+        is_pwned, count = await hibp_checker.check_password(unique_password)
         assert isinstance(is_pwned, bool)
         assert count >= 0
 
@@ -288,32 +266,32 @@ class TestHaveIBeenPwnedChecker:
 class TestBiometricAuthenticator:
     """Tests for biometric authenticator."""
     
-    def test_is_available_stub(self):
-        """Test is_available returns stub value."""
+    def test_default_backend_is_webauthn(self):
+        """Default backend is WebAuthn-based (available)."""
         bio = BiometricAuthenticator()
-        
-        # Stub implementation
-        assert bio.is_available() is False
+        assert bio.is_available() is True
     
     def test_is_enrolled_initial(self):
         """Test initial enrollment state."""
         bio = BiometricAuthenticator()
-        
         assert bio.is_enrolled() is False
     
-    def test_enroll_unavailable_backend(self):
-        """Test enrollment fails when backend is unavailable."""
+    def test_default_backend_is_available(self):
         bio = BiometricAuthenticator()
+        assert bio.is_available() is True
 
+    def test_default_backend_enroll_and_authenticate(self):
+        bio = BiometricAuthenticator()
+        assert bio.enroll() is True
+        assert bio.authenticate() is True
+
+    def test_unavailable_backend_explicit(self):
+        from backend.core.advanced_security import _UnavailableBiometricBackend
+        bio = BiometricAuthenticator(backend=_UnavailableBiometricBackend("test"))
+        assert bio.is_available() is False
+        assert bio.is_enrolled() is False
         with pytest.raises(BiometricError):
             bio.enroll()
-    
-    def test_authenticate_unavailable_backend_raises(self):
-        """Test authenticate raises when backend is unavailable."""
-        bio = BiometricAuthenticator()
-        
-        with pytest.raises(BiometricError):
-            bio.authenticate()
 
     def test_simulator_backend(self, monkeypatch):
         """Test optional in-memory simulator backend."""
@@ -375,18 +353,15 @@ class TestIntegration:
         # Unused count should be correct
         assert recovery_manager.get_unused_count("user123") == 4
     
-    def test_hibp_format_validation(self, hibp_checker):
-        """Test HIBP checker format validation."""
-        # Test various password formats
+    async def test_hibp_format_validation(self, hibp_checker):
         passwords = [
             "short",
             "long_password_123",
             "unicode_пароль",
             "special_!@#$%^&*()",
         ]
-        
         for password in passwords:
-            is_pwned, count = hibp_checker.check_password(password)
+            is_pwned, count = await hibp_checker.check_password(password)
             assert isinstance(is_pwned, bool)
             assert isinstance(count, int)
             assert count >= 0

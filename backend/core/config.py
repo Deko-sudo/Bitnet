@@ -3,7 +3,7 @@
 
 import tomllib
 from pathlib import Path
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 from functools import lru_cache
 
@@ -43,6 +43,8 @@ class CryptoConfig(BaseModel):
             raise ValueError("argon2_memory_cost must be >= 65536 (64 MB)")
         return v
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     @property
     def key_size_bits(self) -> int:
         return self.key_size * 8
@@ -51,10 +53,6 @@ class CryptoConfig(BaseModel):
     def memory_cost_mb(self) -> int:
         return self.argon2_memory_cost // 1024
 
-    class Config:
-        frozen = True
-        extra = "forbid"
-
 
 class RateLimitConfig(BaseModel):
     """Rate limiting configuration."""
@@ -62,8 +60,7 @@ class RateLimitConfig(BaseModel):
     window_seconds: int = Field(default=60, ge=1)
     block_duration_seconds: int = Field(default=1800, ge=60)
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class PasswordStrengthConfig(BaseModel):
@@ -74,8 +71,7 @@ class PasswordStrengthConfig(BaseModel):
     require_lowercase: bool = True
     require_digits: bool = True
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 @lru_cache()

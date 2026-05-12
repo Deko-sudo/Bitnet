@@ -416,4 +416,8 @@ __all__ = [
     "SecureString",
     # Functions
     "secure_delete_file",
+    "zero_bytearray",
 ]
+
+# Alias for backward compatibility (tests expect this name)
+zero_bytearray = zero_memory

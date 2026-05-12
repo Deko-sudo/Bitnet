@@ -20,12 +20,14 @@ import asyncio
 import csv
 import io
 import json
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
+from typing import BinaryIO, Optional
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import UploadFile
 
 from backend.core.crypto_bridge import LockedBuffer
 from backend.core.crypto_core import zero_memory
@@ -96,6 +98,16 @@ MAX_CONCURRENT_BATCHES = 4
 MAX_ROW_SIZE_BYTES = 10_000
 
 
+_CSV_EOF = object()
+
+
+def _next_csv_row(reader: csv.DictReader) -> dict[str, str] | object:
+    try:
+        return next(reader)
+    except StopIteration:
+        return _CSV_EOF
+
+
 # ===========================================================================
 # Service
 # ===========================================================================
@@ -120,72 +132,73 @@ class DataPortabilityService:
     # IMPORT
     # =======================================================================
 
-    async def import_from_csv(self, user_id: int, file_content: bytes) -> ImportResult:
+    async def import_from_csv(
+        self,
+        user_id: int,
+        file_content: UploadFile | BinaryIO | bytes,
+    ) -> ImportResult:
         """
-        Импорт из CSV-файла.
+        Импорт из CSV-файла без загрузки файла целиком в память.
 
-        1. Декодирует CSV в строки.
-        2. Валидирует каждую строку через Pydantic.
-        3. Шифрует поля и создаёт ``PasswordEntry``.
-        4. Пакетная вставка через ``add_all()`` + commit каждые ``batch_size``.
+        ``UploadFile.file`` читается потоково. Каждая строка валидируется,
+        накапливается только текущий batch, затем сразу шифруется и вставляется.
         """
-        text_content = file_content.decode("utf-8")
-        reader = csv.DictReader(io.StringIO(text_content))
-
-        # Zeroize исходный файл после декодирования
-        raw_bytes = bytearray(file_content)
-
-        rows: list[ImportRowSchema] = []
         result = ImportResult()
+        rows: list[ImportRowSchema] = []
 
-        for row in reader:
+        async for row_no, row in self._iter_csv_rows(file_content):
             result.total_rows += 1
             try:
                 schema = ImportRowSchema(
-                    title=row.get("title", "").strip(),
-                    username=row.get("username", "").strip() or None,
-                    password=row.get("password", ""),
-                    url=row.get("url", "").strip() or None,
-                    notes=row.get("notes", "").strip() or None,
+                    title=(row.get("title") or "").strip(),
+                    username=(row.get("username") or "").strip() or None,
+                    password=row.get("password") or "",
+                    url=(row.get("url") or "").strip() or None,
+                    notes=(row.get("notes") or "").strip() or None,
                 )
                 rows.append(schema)
             except ValidationError as exc:
                 result.skipped += 1
-                result.errors.append(f"Row {result.total_rows}: {exc}")
+                result.errors.append(f"Row {row_no}: {exc}")
             finally:
-                # Zeroize сырые данные строки
                 for value in row.values():
                     if isinstance(value, str):
                         buf = bytearray(value.encode())
                         zero_memory(buf)
 
-        zero_memory(raw_bytes)
+            if len(rows) >= self.batch_size:
+                imported = await self._insert_batch(user_id, rows)
+                result.imported += imported
+                result.skipped += len(rows) - imported
+                rows.clear()
 
-        if not rows:
-            return result
+        if rows:
+            imported = await self._insert_batch(user_id, rows)
+            result.imported += imported
+            result.skipped += len(rows) - imported
 
-        result.imported = await self._batch_insert(user_id, rows, result)
         return result
 
     async def import_from_jsonl(
-        self, user_id: int, file_content: bytes
+        self,
+        user_id: int,
+        file_content: UploadFile | BinaryIO | bytes,
     ) -> ImportResult:
         """
-        Импорт из JSONL (JSON Lines). Каждая строка — один объект.
+        Импорт из JSONL (JSON Lines) без загрузки файла целиком в память.
 
-        Работает так же, как CSV-импорт, но парсит JSON вместо CSV.
+        Каждая строка читается из ``UploadFile.file``, валидируется и попадает
+        в batch-insert сразу после накопления ``batch_size`` записей.
         """
-        text = file_content.decode("utf-8")
-        raw_buf = bytearray(file_content)
-
-        rows: list[ImportRowSchema] = []
         result = ImportResult()
+        rows: list[ImportRowSchema] = []
 
-        for line_no, line in enumerate(text.splitlines(), start=1):
+        async for line_no, line in self._iter_text_lines(file_content):
             line = line.strip()
             if not line:
                 continue
             result.total_rows += 1
+            raw_line = bytearray(line.encode("utf-8"))
             try:
                 data = json.loads(line)
                 schema = ImportRowSchema(**data)
@@ -193,37 +206,89 @@ class DataPortabilityService:
             except (json.JSONDecodeError, ValidationError) as exc:
                 result.skipped += 1
                 result.errors.append(f"Line {line_no}: {exc}")
+            finally:
+                zero_memory(raw_line)
 
-        zero_memory(raw_buf)
+            if len(rows) >= self.batch_size:
+                imported = await self._insert_batch(user_id, rows)
+                result.imported += imported
+                result.skipped += len(rows) - imported
+                rows.clear()
 
-        if not rows:
-            return result
+        if rows:
+            imported = await self._insert_batch(user_id, rows)
+            result.imported += imported
+            result.skipped += len(rows) - imported
 
-        result.imported = await self._batch_insert(user_id, rows, result)
         return result
 
-    async def _batch_insert(
+    async def _iter_csv_rows(
         self,
-        user_id: int,
-        rows: list[ImportRowSchema],
-        result: ImportResult,
-    ) -> int:
+        source: UploadFile | BinaryIO | bytes,
+    ) -> AsyncGenerator[tuple[int, dict[str, str]], None]:
         """
-        Пакетная вставка: шифрование + ``add_all()`` + commit каждые ``batch_size``.
+        Yield CSV rows from a binary upload stream without materializing the file.
 
-        Использует семафор для ограничения параллельных batch-операций.
+        ``csv.DictReader`` remains the parser so quoted values and multiline CSV
+        fields are handled by the standard library. Iteration is moved to a
+        worker thread because ``SpooledTemporaryFile`` exposes synchronous file
+        methods.
         """
-        imported = 0
+        stream = self._coerce_binary_stream(source)
+        await asyncio.to_thread(stream.seek, 0)
 
-        for batch_start in range(0, len(rows), self.batch_size):
-            batch = rows[batch_start:batch_start + self.batch_size]
+        wrapper = io.TextIOWrapper(stream, encoding="utf-8", newline="")
+        csv.field_size_limit(MAX_ROW_SIZE_BYTES)
+        reader = csv.DictReader(wrapper)
+        row_no = 1
+        try:
+            while True:
+                row = await asyncio.to_thread(_next_csv_row, reader)
+                if row is _CSV_EOF:
+                    break
+                row_no += 1
+                self._enforce_row_size(row.values(), row_no)
+                yield row_no, row
+        finally:
+            wrapper.detach()
 
-            async with self._semaphore:
-                ok = await self._insert_batch(user_id, batch)
-                imported += ok
-                result.skipped += len(batch) - ok
+    async def _iter_text_lines(
+        self,
+        source: UploadFile | BinaryIO | bytes,
+    ) -> AsyncGenerator[tuple[int, str], None]:
+        """Yield decoded UTF-8 lines from an upload stream one at a time."""
+        stream = self._coerce_binary_stream(source)
+        await asyncio.to_thread(stream.seek, 0)
 
-        return imported
+        line_no = 0
+        while True:
+            raw_line = await asyncio.to_thread(stream.readline)
+            if raw_line == b"":
+                break
+
+            line_no += 1
+            if len(raw_line) > MAX_ROW_SIZE_BYTES:
+                raise ImportValidationError(f"Line {line_no} exceeds row size limit")
+
+            raw_buf = bytearray(raw_line)
+            try:
+                yield line_no, raw_line.decode("utf-8")
+            finally:
+                zero_memory(raw_buf)
+
+    @staticmethod
+    def _coerce_binary_stream(source: UploadFile | BinaryIO | bytes) -> BinaryIO:
+        if isinstance(source, UploadFile):
+            return source.file
+        if isinstance(source, bytes):
+            return io.BytesIO(source)
+        return source
+
+    @staticmethod
+    def _enforce_row_size(values, row_no: int) -> None:
+        size = sum(len(value.encode("utf-8")) for value in values if value is not None)
+        if size > MAX_ROW_SIZE_BYTES:
+            raise ImportValidationError(f"Row {row_no} exceeds row size limit")
 
     async def _insert_batch(self, user_id: int, rows: list[ImportRowSchema]) -> int:
         """
@@ -258,9 +323,7 @@ class DataPortabilityService:
 
         return imported
 
-    async def _encrypt_and_build_entry(
-        self, user_id: int, row: ImportRowSchema
-    ) -> PasswordEntry:
+    async def _encrypt_and_build_entry(self, user_id: int, row: ImportRowSchema) -> PasswordEntry:
         """
         Шифрует поля строки и создаёт ``PasswordEntry``.
 
@@ -319,9 +382,7 @@ class DataPortabilityService:
     # EXPORT — Streaming
     # =======================================================================
 
-    async def _query_user_entries(
-        self, user_id: int
-    ) -> AsyncGenerator[PasswordEntry, None]:
+    async def _query_user_entries(self, user_id: int) -> AsyncGenerator[PasswordEntry, None]:
         """
         Асинхронный генератор: отдаёт записи по одной через ``yield``.
 
@@ -332,6 +393,10 @@ class DataPortabilityService:
             .where(
                 PasswordEntry.user_id == user_id,
                 PasswordEntry.is_deleted == False,  # noqa: E712
+                PasswordEntry.title_cipher.is_not(None),
+                PasswordEntry.title_cipher != "",
+                PasswordEntry.password_cipher.is_not(None),
+                PasswordEntry.password_cipher != "",
             )
             .order_by(PasswordEntry.id)
         )

@@ -15,30 +15,69 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, SecretStr, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_serializer
 from backend.core.crypto_core import zero_memory
+
+
+_MAX_FIELD_LENGTH = 10000
 
 
 class EntryCreateSchema(BaseModel):
     """Схема создания новой записи с паролем."""
 
-    title: SecretStr
-    username: Optional[SecretStr] = None
-    password: SecretStr
-    url: Optional[SecretStr] = None
-    notes: Optional[SecretStr] = None
+    title: SecretStr = Field(..., max_length=_MAX_FIELD_LENGTH)
+    username: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
+    password: SecretStr = Field(..., max_length=_MAX_FIELD_LENGTH)
+    url: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
+    notes: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
 
 
 class EntryUpdateSchema(BaseModel):
     """Схема обновления записи (все поля необязательны)."""
 
-    title: Optional[SecretStr] = None
-    username: Optional[SecretStr] = None
-    password: Optional[SecretStr] = None
-    url: Optional[SecretStr] = None
-    notes: Optional[SecretStr] = None
+    title: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
+    username: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
+    password: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
+    url: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
+    notes: Optional[SecretStr] = Field(None, max_length=_MAX_FIELD_LENGTH)
+
+
+class EntryEnvelopeCreateSchema(BaseModel):
+    """E2EE create schema: opaque client-encrypted payload."""
+
+    ciphertext: str = Field(..., min_length=1)
+    iv: str = Field(..., min_length=1)
+    auth_tag: str = Field(..., min_length=1)
+    key_metadata: dict[str, Any] = Field(default_factory=dict)
+    title_search: Optional[str] = None
+
+
+class EntryEnvelopeUpdateSchema(BaseModel):
+    """E2EE update schema: optional opaque encrypted payload replacement."""
+
+    ciphertext: Optional[str] = Field(default=None, min_length=1)
+    iv: Optional[str] = Field(default=None, min_length=1)
+    auth_tag: Optional[str] = Field(default=None, min_length=1)
+    key_metadata: Optional[dict[str, Any]] = None
+    title_search: Optional[str] = None
+
+
+class EntryEnvelopeResponseSchema(BaseModel):
+    """E2EE response schema: encrypted blobs only, no plaintext."""
+
+    id: int
+    user_id: int
+    ciphertext: str
+    iv: str
+    auth_tag: str
+    key_metadata: dict[str, Any] = Field(default_factory=dict)
+    title_search: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EntryResponseSchema(BaseModel):
@@ -82,8 +121,6 @@ class EntryResponseRaw:
         for field in [self.title, self.password, self.username, self.url, self.notes]:
             if field is not None:
                 zero_memory(field)
-
-
 
 
 class EntryListItemSchema(BaseModel):

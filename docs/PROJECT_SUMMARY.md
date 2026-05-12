@@ -1,166 +1,78 @@
 # Project Summary
-## Итоги 12-недельной разработки Password Manager
+## Итоги разработки BitNet Password Manager
 
-**Версия:** 2.0.0  
+**Версия:** 2.2.0  
 **Дата:** Май 2026  
-**Статус:** ✅ ЗАВЕРШЁН
+**Статус:** В РАЗРАБОТКЕ
 
 ---
 
 ## 1. Обзор проекта
 
-### Название
-**Password Manager** — безопасная система хранения паролей
-
-### Длительность
-**12 недель** (Март — Май 2026)
-
-### Команда
-- **BE1 (Никита):** Криптография, безопасность, архитектура
-- **BE2 (Алексей):** База данных, CRUD, API
-
 ### Цель
-Создание production-ready менеджера паролей с максимальным уровнем безопасности.
+Production-ready менеджер паролей с Zero-Trust архитектурой, E2EE шифрованием и интеграцией с Rust crypto bridge.
 
 ---
 
-## 2. Выполненные работы по неделям
+## 2. История релизов
 
-### Неделя 1: Документация и настройка
+### v2.2.0 — Май 2026 (текущий)
 
-**Задачи:**
-- [x] Архитектурная диаграмма (draw.io)
-- [x] Модель угроз (Threat Model)
-- [x] Выбор криптоалгоритмов (crypto_choices.md)
-- [x] Настройка структуры проекта
-- [x] CI/CD pipeline (GitHub Actions)
+Новые модули
+------------
+- `backend/features/breach_monitor_async.py` — AsyncBreachMonitorService (asyncio, no threading, SQLAlchemy DB)
+- `backend/api/v1/endpoints/breach.py` — REST API для Breach Monitor (status, monitor, alerts, check, check/now)
 
-**Результат:** Полная документация по безопасности и настроенный проект.
+Новые ORM-модели
+----------------
+- `BreachAlert` — breach alerts с severity, status, DB-персистентность
+- `MonitoredItem` — отслеживаемые пароли/email хеши с DB-персистентность
+- `WebAuthnCredential` — extended with `authenticator_type`, `aaguid`, `is_biometric`
 
----
+Рефакторинг
+-----------
+- `AsyncBreachMonitorService` — fully async, no threading, `db_session_factory` pattern
+  - `_runtime_emails: Dict[str, str]` in-memory only (never persisted to DB)
+  - `asyncio.create_task` for `_monitor_loop`, `await .start()`/`.stop()` in lifespan
+- `HaveIBeenPwnedChecker` → async (httpx.AsyncClient), sync wrappers для backward compat
+- `BiometricAuthenticator` → `_WebAuthnBiometricBackend` with direct DB query (WebAuthnCredential.is_biometric)
+- `BiometricAuthenticator.__init__` → new `user_id` parameter for DB-backed enrollment check
+- `fido2.py` — biometric endpoints: `GET /biometric/status`, `DELETE /biometric/unregister/{id}`
+- `main.py` → async lifespan with `AsyncBreachMonitorService` start/stop hooks
+- `breach.py` → all endpoints inject `AsyncBreachMonitorService` via `Depends(get_breach_monitor)`
+- `conftest.py` → `breach_monitor` fixture, `StaticPool` for in-memory SQLite
+- Alembic migration `2a3b4c5d6e7f` for BreachAlert, MonitoredItem, WebAuthnCredential columns
 
-### Неделя 2: Криптографическое ядро
+Удалено
+-------
+- `backend/core/fido2_auth.py` — неиспользуемый standalone FIDO2 модуль (заменён на webauthn API)
+- Дублированные методы `_save_email_cache` / `_load_email_cache` в breach_monitor.py
 
-**Задачи:**
-- [x] CryptoCore класс (AES-256-GCM, Argon2id, HMAC)
-- [x] Методы деривации ключей
-- [x] Методы шифрования/расшифровки
-- [x] Защита памяти (zero_memory)
-- [x] 58 тестов (92% покрытие)
+Тесты
+-----
+- `backend/tests/test_breach_api.py` — async tests for all breach endpoints
+- `test_v2_1_cleanup.py` — AsyncBreachMonitorService unit tests (lifecycle, CRUD, alerts)
+- `test_smoke_coverage_v2.py` — AsyncBreachMonitorService smoke tests, severity function
+- `test_v2_1_cleanup.py` — WebAuthnBiometricBackend DB query tests
+- Updated `conftest.py` — StaticPool for in-memory SQLite, breach_monitor fixture
 
-**Результат:** Готовое криптографическое ядро с тестами.
+### v2.1.0 — Май 2026
 
----
+Новые модули
+------------
+- `backend/features/password_generator.py` — генератор паролей / passphrase / PIN
+- `backend/features/search_engine.py` — blind-index exact-match поиск
+- `backend/features/backup_manager.py` — AES-256-GCM + HMAC backup/restore
+- `backend/database/db_optimization.py` — SQLite PRAGMA (WAL, 64MB cache, mmap)
+- `backend/api/v1/endpoints/generator.py` — REST endpoints для генерации
+- `backend/api/v1/endpoints/backups.py` — REST endpoints для backup/restore
+- `alembic/versions/` — initial Alembic migration
 
-### Неделя 3: Управление аутентификацией
-
-**Задачи:**
-- [x] AuthManager (сессии, автоблокировка)
-- [x] RateLimiter (защита от брутфорса)
-- [x] PasswordStrengthChecker
-- [x] 49 тестов (93% покрытие)
-
-**Результат:** Система управления сессиями и защита от брутфорса.
-
----
-
-### Неделя 4: Аудит и безопасное удаление
-
-**Задачи:**
-- [x] AuditLogger (логирование событий)
-- [x] SecureFileDeleter (многопроходная перезапись)
-- [x] MemoryGuard (автоочистка памяти)
-- [x] 38 тестов (88% покрытие)
-
-**Результат:** Система аудита и безопасного удаления данных.
-
----
-
-### Неделя 5: Security Audit
-
-**Задачи:**
-- [x] Bandit security scan
-- [x] Mypy type checking
-- [x] Safety dependency check
-- [x] SECURITY_GUIDELINES.md
-
-**Результат:** 0 критических уязвимостей, документация по безопасности.
-
----
-
-### Неделя 6: Финальные исправления и релиз v1.0.0
-
-**Задачи:**
-- [x] Исправление mypy ошибок
-- [x] Обновление CHANGELOG.md
-- [x] Финальный security audit
-- [x] Релиз v1.0.0
-
-**Результат:** Production-ready релиз v1.0.0.
-
----
-
-### Неделя 7: Продвинутые функции
-
-**Задачи:**
-- [x] TOTP 2FA аутентификация (RFC 6238)
-- [x] Recovery Codes генерация
-- [x] HIBP API интеграция
-- [x] BiometricAuthenticator (stub)
-- [x] 32 теста (96% покрытие)
-
-**Результат:** Расширенные функции безопасности, релиз v1.1.0.
-
----
-
-### Неделя 8: PyPy оптимизация
-
-**Задачи:**
-- [x] JIT warmup менеджер
-- [x] Performance Comparator
-- [x] Platform detection
-- [x] 17 тестов (92% покрытие)
-- [x] Релиз v1.2.0
-
-**Результат:** Оптимизация производительности для PyPy.
-
----
-
-### Недели 9-10: Code Review и исправление уязвимостей
-
-**Задачи:**
-- [x] Code Review кода BE2
-- [x] Найдено 19 уязвимостей (8 Critical, 9 High, 2 Medium)
-- [x] Все уязвимости исправлены
-- [x] 20 security тестов добавлено
-- [x] Релиз v2.0.0 (Security Release)
-
-**Результат:** Все уязвимости исправлены, Security Score A+.
-
----
-
-### Неделя 11: Финальная документация
-
-**Задачи:**
-- [x] SECURITY_GUIDELINES.md v2.0 (обновлён)
-- [x] SECURITY_RESPONSE.md (процедура реагирования)
-- [x] DEPLOYMENT.md (security hardening)
-- [x] RELEASE_NOTES_v2.0.0.md
-
-**Результат:** Полная документация для production развёртывания.
-
----
-
-### Неделя 12: Итоговый релиз
-
-**Задачи:**
-- [x] Итоговая презентация (PRESENTATION.md)
-- [x] PROJECT_SUMMARY.md
-- [x] FUTURE_ROADMAP.md
-- [x] Финальный отчёт для стейкхолдеров
-- [x] Релиз v2.0.0 стабильный
-
-**Результат:** Проект полностью завершён, готов к production.
+v2.1.0 Cleanup
+--------------
+- ConfigDict migration, FastAPI lifespan migration
+- Coverage 92%+, Bandit 0 HIGH/0 MEDIUM
+- `.gitignore` — `.hypothesis/`, `bandit_report.json`
 
 ---
 
@@ -170,182 +82,47 @@
 
 | Метрика | Значение |
 |---------|----------|
-| Строк кода | 1140 |
-| Модулей | 9 |
-| Unit тестов | 233 |
-| Покрытие кода | 91% |
-| Бенчмарков | 18 |
+| Строк кода | 15000+ |
+| Модулей | 14+ |
+| Unit тестов | 490+ |
+| Покрытие кода | 91.9% |
 
 ### Безопасность
 
 | Метрика | Значение |
 |---------|----------|
-| Уязвимостей найдено | 19 |
-| Уязвимостей исправлено | 19 |
-| Bandit issues | 0 |
-| Security Score | A+ (59/60) |
-
-### Документация
-
-| Метрика | Значение |
-|---------|----------|
-| Файлов документации | 18 |
-| Строк документации | 5000+ |
-| Диаграмм | 1 (draw.io) |
+| Bandit HIGH issues | 0 |
+| Bandit MEDIUM issues | 0 |
+| Security Score | A+ |
 
 ---
 
-## 4. Ключевые достижения
-
-### Технические
+## 4. Достижения v2.2.0
 
 ```
-✅ AES-256-GCM шифрование реализовано
-✅ Argon2id деривация ключей (t=3, m=64MB, p=4)
-✅ HMAC-SHA256 подписи
-✅ Rate limiting с exponential backoff
-✅ Audit logging всех CRUD операций
-✅ Secure file deletion (DoD 5220.22-M)
-✅ TOTP 2FA аутентификация
-✅ Recovery Codes
-✅ HIBP API интеграция (k-anonymity)
-✅ PyPy JIT warmup оптимизация
-```
-
-### Тестирование
-
-```
-✅ 233 unit теста пройдено
-✅ 91% покрытие кода
-✅ 18 бенчмарков производительности
-✅ 20 security тестов
-✅ 0 критических уязвимостей
-```
-
-### Документация
-
-```
-✅ 18 файлов документации
-✅ 5000+ строк документации
-✅ Архитектурная диаграмма
-✅ Модель угроз
-✅ Security Guidelines
-✅ Deployment Guide
-✅ Incident Response Procedure
+✅ AsyncBreachMonitorService (asyncio, db_session_factory, no threading/JSON)
+✅ Breach Monitor REST API (10 endpoints, monitor injection via app.state)
+✅ BreachAlert + MonitoredItem ORM models + Alembic migration
+✅ Biometric Auth via WebAuthnCredential DB query (direct SQLAlchemy)
+✅ /fido2/biometric/status, /fido2/biometric/unregister endpoints
+✅ FIDO2 registration supports authenticator_type="platform"
+✅ Async HaveIBeenPwnedChecker (httpx.AsyncClient)
+✅ Lifecycle hooks: AsyncBreachMonitorService start/stop in lifespan()
+✅ Deleted unused core/fido2_auth.py
+✅ Coverage 91.9% · Bandit 0 HIGH / 0 MEDIUM
 ```
 
 ---
 
-## 5. Извлечённые уроки
+## 5. Backlog / Следующие шаги
 
-### Что прошло хорошо
-
-1. **Раннее тестирование** — начало написания тестов с Недели 2 позволило поддерживать высокое покрытие
-2. **Документирование** — документация создавалась параллельно с кодом
-3. **Security-first подход** — безопасность была приоритетом с первого дня
-4. **Автоматизация** — CI/CD pipeline автоматически проверял каждый коммит
-
-### Что можно улучшить
-
-1. **Type hints** — стоило добавить с самого начала, а не исправлять на Неделе 6
-2. **Code Review** — ранний Code Review (с Недели 3) предотвратил бы накопление уязвимостей
-3. **PyPy совместимость** — стоило проверить раньше, чтобы избежать проблем на Неделе 8
+- Full async test suite migration (pytest-asyncio for all DB/API tests)
+- Email notification callbacks for breach alerts
+- Rate limiting on breach monitor endpoints
 
 ---
 
-## 6. Финальный статус
+## 6. Контакты
 
-### Готовность к production
-
-```
-╔══════════════════════════════════════════════════════════╗
-║  ✅ PRODUCTION READY v2.0.0                              ║
-║                                                          ║
-║  📦 1140 строк кода                                      ║
-║  🧪 233 теста (91% покрытие)                            ║
-║  🔒 0 критических уязвимостей                            ║
-║  📚 18 файлов документации                               ║
-║  🏅 Security Score: A+ (59/60)                          ║
-╚══════════════════════════════════════════════════════════╝
-```
-
-### Развёртывание
-
-**Минимальные требования:**
-- CPU: 4 cores
-- RAM: 8 GB
-- Storage: SSD
-- Network: 1 Gbps
-
-**Рекомендуемые требования:**
-- CPU: 8 cores
-- RAM: 16 GB
-- Storage: NVMe SSD
-- Network: 10 Gbps
-
----
-
-## 7. Планы на будущее
-
-### Краткосрочные (v2.1.0, Август 2026)
-
-- [ ] Миграция на Pydantic V2 ConfigDict
-- [ ] Исправление mypy warnings
-- [ ] Биометрическая аутентификация (Windows Hello)
-
-### Среднесрочные (v2.2.0, Ноябрь 2026)
-
-- [ ] FIDO2/WebAuthn поддержка
-- [ ] Quantum-resistant алгоритмы
-- [ ] Browser extension
-
-### Долгосрочные (v3.0.0, Февраль 2027)
-
-- [ ] Mobile apps (iOS/Android)
-- [ ] Cloud sync (end-to-end encrypted)
-- [ ] Team/password sharing features
-
----
-
-## 8. Благодарности
-
-### Команда проекта
-
-- **Никита (BE1):** Криптография, безопасность, архитектура, документация
-- **Алексей (BE2):** База данных, CRUD, API, исправление уязвимостей
-
-### Инструменты
-
-- **cryptography:** AES-GCM, HMAC реализации
-- **argon2-cffi:** Argon2id деривация
-- **pytest:** Тестирование и бенчмарки
-- **bandit:** Security scanning
-- **mypy:** Type checking
-
----
-
-## 9. Контакты
-
-### Поддержка
-
-- **Security Issues:** security@example.com
-- **General Support:** support@example.com
-- **GitHub:** https://github.com/password-manager
-
-### Документация
-
-- **README:** /README.md
-- **Security Guidelines:** /SECURITY_GUIDELINES.md
-- **Deployment Guide:** /docs/DEPLOYMENT.md
-- **API Spec:** /docs/crypto_core_spec.md
-
----
-
-**Документ подготовлен:**  
-Никита (BE1) — Security Lead  
-Алексей (BE2) — Backend Developer
-
-**Дата:** Май 2026  
-**Версия:** 2.0.0  
-**Статус:** ✅ ЗАВЕРШЁН
-
+- **Security Issues:** <security@example.com>
+- **Repository:** <https://github.com/password-manager>

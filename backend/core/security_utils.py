@@ -122,9 +122,20 @@ class RateLimiter:
         self._exponential_base = exponential_base
         self._max_delay = max_delay_seconds
 
-        # Storage: identifier -> {attempts: [], blocked_until: float}
         self._storage: Dict[str, dict] = {}
         self._lock = threading.RLock()
+        self._purge_counter = 0
+        self._purge_interval = 100
+
+    def _purge_fully_expired(self) -> None:
+        now = time.time()
+        expired = [
+            k for k, v in self._storage.items()
+            if v.get("blocked_until", 0) < now - self._window_seconds - self._block_duration
+            and not v.get("attempts")
+        ]
+        for k in expired:
+            del self._storage[k]
 
     def can_attempt(self, identifier: str) -> bool:
         """
@@ -142,6 +153,10 @@ class RateLimiter:
         """
         with self._lock:
             now = time.time()
+            self._purge_counter += 1
+            if self._purge_counter >= self._purge_interval:
+                self._purge_counter = 0
+                self._purge_fully_expired()
 
             # Clean old data
             self._cleanup(identifier, now)
@@ -292,22 +307,26 @@ class RateLimiter:
             if identifier in self._storage:
                 del self._storage[identifier]
 
-async def check_and_record_attempt(db: AsyncSession, success: bool, window_minutes: int = 15, max_failures: int = 5) -> bool:
+async def check_and_record_attempt(db: AsyncSession, success: bool, window_minutes: int = 15, max_failures: int = 5, ip_address: str | None = None, username: str | None = None) -> bool:
     """
     Check if an attempt is allowed, and record it in the database.
     Rate limit blocks after `max_failures` recent failed attempts.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
-    stmt = select(func.count()).where(
+    conditions = [
         LoginAttempt.attempted_at >= cutoff,
-        LoginAttempt.success == False
-    )
+        LoginAttempt.success == False,
+    ]
+    if ip_address:
+        conditions.append(LoginAttempt.ip_address == ip_address)
+
+    stmt = select(func.count()).where(*conditions)
     failures = await db.scalar(stmt)
     
     if failures >= max_failures:
         return False  # Blocked
     
-    db.add(LoginAttempt(success=success))
+    db.add(LoginAttempt(success=success, ip_address=ip_address, username=username))
     await db.commit()
     return True
 

@@ -14,7 +14,7 @@ Version: 1.0
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from enum import IntEnum
 
@@ -103,7 +103,7 @@ class AuditLog(Base):  # type: ignore[misc]
     ip_address = Column(String(45), nullable=True)  # IPv6 max length
     success = Column(Boolean, default=True)
     details = Column(Text, nullable=True)  # JSON string
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Indexes for common queries
     __table_args__ = (
@@ -269,7 +269,7 @@ class AuditEvent(BaseModel):
             AuditLog instance
         """
         return AuditLog(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             event_type=self.event_type.value,
             event_type_name=self.event_type.name,
             user_id=self.user_id,
@@ -367,6 +367,8 @@ class AuditLogger:
                 with Session(bind=bind) as audit_session:
                     audit_session.add(audit_log)
                     audit_session.commit()
+                    # Eagerly load all lazy attributes while still bound
+                    audit_session.refresh(audit_log)
             except Exception as e:
                 # Do not touch caller session state on audit write failures.
                 self._logger.error(f"Failed to commit audit log: {e}")
@@ -450,7 +452,7 @@ class AuditLogger:
         """
         from datetime import timedelta
         
-        cutoff_date = datetime.utcnow() - timedelta(days=days_to_keep)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
         
         deleted = self._session.query(AuditLog).filter(
             AuditLog.timestamp < cutoff_date

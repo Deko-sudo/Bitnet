@@ -51,9 +51,12 @@ def server_wrap_key_file() -> Generator[str, None, None]:
 
 @pytest_asyncio.fixture(scope="session")
 async def engine(server_wrap_key_file):
+    from sqlalchemy.pool import StaticPool
+
     eng = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         future=True,
     )
 
@@ -117,8 +120,6 @@ async def client(engine) -> AsyncGenerator[AsyncClient, None]:
     await connection.close()
 
 
-# (Registered User Fixtures ... remained similar but using AsyncClient)
-
 # =============================================================================
 # Registered User + Auth Headers (for API integration tests)
 # =============================================================================
@@ -129,7 +130,7 @@ _TEST_PASSWORD = "SecureP@ssw0rd2024!"
 @pytest_asyncio.fixture()
 async def registered_user(db_session) -> dict:
     """
-    Регистрирует пользователя через API и возвращает его данные.
+    Registers a user via the API and returns their data.
     """
     from httpx import ASGITransport, AsyncClient
 
@@ -156,7 +157,7 @@ async def registered_user(db_session) -> dict:
 @pytest_asyncio.fixture()
 async def auth_headers(client, registered_user) -> dict:
     """
-    Логинится через API и возвращает заголовки с Bearer-токеном.
+    Logs in via API and returns Authorization headers.
     """
     login_resp = await client.post(
         "/api/v1/auth/login",
@@ -168,3 +169,24 @@ async def auth_headers(client, registered_user) -> dict:
     assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
     token_data = login_resp.json()
     return {"Authorization": f"Bearer {token_data['access_token']}"}
+
+
+# =============================================================================
+# Breach Monitor fixture (for API integration tests)
+# =============================================================================
+
+
+@pytest_asyncio.fixture()
+async def breach_monitor(engine):
+    """Create an AsyncBreachMonitorService wired to the test DB."""
+    from backend.features.breach_monitor_async import AsyncBreachMonitorService
+
+    session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    monitor = AsyncBreachMonitorService(
+        db_session_factory=session_factory,
+        hibp_api_key=None,
+        check_interval_hours=9999,
+    )
+    await monitor.start()
+    yield monitor
+    await monitor.stop()

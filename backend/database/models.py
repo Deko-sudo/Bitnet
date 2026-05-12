@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    Text,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -42,6 +43,10 @@ class User(Base):
         index=True,
         nullable=True,
     )
+    session_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -59,9 +64,14 @@ class LoginAttempt(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Index for fast counting of failed attempts in the last N minutes
-    __table_args__ = (Index("ix_login_attempts_at", "attempted_at"),)
+    __table_args__ = (
+        Index("ix_login_attempts_at", "attempted_at"),
+        Index("ix_login_attempts_ip", "ip_address"),
+    )
 
 
 class RecoveryCode(Base):
@@ -91,14 +101,23 @@ class PasswordEntry(Base):
 
     title_search: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
 
-    title_cipher: Mapped[str] = mapped_column(String, nullable=False)
-    title_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    # E2EE envelope fields. The backend stores these blobs as opaque data and
+    # does not derive keys, encrypt, decrypt, or inspect plaintext.
+    ciphertext: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    iv: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    auth_tag: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    key_metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Legacy server-side encrypted fields kept nullable for migration/import
+    # compatibility while the frontend moves to the E2EE envelope contract.
+    title_cipher: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    title_nonce: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     username_cipher: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     username_nonce: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-    password_cipher: Mapped[str] = mapped_column(String, nullable=False)
-    password_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    password_cipher: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    password_nonce: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     url_cipher: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     url_nonce: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -121,6 +140,9 @@ class PasswordEntry(Base):
 
     user: Mapped["User"] = relationship("User", back_populates="entries")
 
+    __table_args__ = (
+        Index("ix_entries_user_deleted", "user_id", "is_deleted"),
+    )
     __mapper_args__ = {"version_id_col": version_id}
 
 
@@ -129,7 +151,7 @@ class PasswordHistory(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     entry_id: Mapped[int] = mapped_column(
-        ForeignKey("password_entries.id"), index=True, nullable=False
+        ForeignKey("password_entries.id", ondelete="CASCADE"), index=True, nullable=False
     )
 
     # Storage contract (same as PasswordEntry):
@@ -192,6 +214,13 @@ class WebAuthnCredential(Base):
 
     # Metadata
     label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    authenticator_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="cross-platform"
+    )
+    aaguid: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    is_biometric: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -200,3 +229,111 @@ class WebAuthnCredential(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship("User", backref="webauthn_credentials")
+
+
+class Fido2Challenge(Base):
+    """Persistent, one-time WebAuthn challenge with TTL."""
+
+    __tablename__ = "fido2_challenges"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+    challenge: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (Index("ix_fido2_challenges_purpose_expires", "purpose", "expires_at"),)
+
+
+class BreachAlert(Base):
+    """Persistent breach alert for monitored passwords and emails."""
+
+    __tablename__ = "breach_alerts"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    alert_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    value_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    value_preview: Mapped[str] = mapped_column(String(8), nullable=False)
+    breach_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="new")
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    user: Mapped["User"] = relationship("User", backref="breach_alerts")
+
+    __table_args__ = (Index("ix_breach_alerts_user_status", "user_id", "status"),)
+
+
+class MonitoredItem(Base):
+    """Tracked password hash or email hash for breach monitoring."""
+
+    __tablename__ = "monitored_items"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    item_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    value_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    last_checked: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    check_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    user: Mapped["User"] = relationship("User", backref="monitored_items")
+
+
+class TotpEntry(Base):
+    """TOTP authenticator key — encrypted with the user's master key."""
+
+    __tablename__ = "totp_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    vault_entry_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("password_entries.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    secret_cipher: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    secret_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+    issuer: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    account_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    digits: Mapped[int] = mapped_column(Integer, nullable=False, default=6)
+    period: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    algorithm: Mapped[str] = mapped_column(String(16), nullable=False, default="SHA1")
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    user: Mapped["User"] = relationship("User", backref="totp_entries")
+    vault_entry: Mapped[Optional["PasswordEntry"]] = relationship("PasswordEntry", backref="totp_entries")

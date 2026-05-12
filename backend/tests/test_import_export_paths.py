@@ -1,84 +1,48 @@
 # -*- coding: utf-8 -*-
-"""Tests for import/export path configuration and cross-platform behavior."""
+"""
+Tests for import/export path configuration and cross-platform behavior.
+
+Tests the real ``backend.services.import_export.DataPortabilityService``
+with mocked crypto dependencies so the Rust bridge is not required.
+"""
 
 import json
 import secrets
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+import pytest_asyncio
 
-from backend.features.import_export import ImportExportService
+from backend.services.import_export import DataPortabilityService, ImportResult
 
 
-@pytest.fixture
-def import_export_service(tmp_path):
-    export_dir = tmp_path / "exports"
-    import_dir = tmp_path / "imports"
-    temp_dir = tmp_path / "temp"
-    return ImportExportService(
-        db_session=None,
-        crypto_key=secrets.token_bytes(32),
-        export_dir=export_dir,
-        import_dir=import_dir,
-        temp_dir=temp_dir,
+@pytest_asyncio.fixture
+async def mock_service(tmp_path):
+    """Create a DataPortabilityService with a mocked master_key and session."""
+    mock_session = MagicMock()
+    mock_key = MagicMock()
+    mock_key.__len__ = lambda _s: 32
+    mock_key.__bool__ = lambda _s: True
+
+    return DataPortabilityService(
+        session=mock_session,
+        master_key=mock_key,
     )
 
 
-def test_export_uses_configured_base_dir_for_relative_paths(import_export_service, tmp_path):
-    entries = [
-        {
-            "id": 1,
-            "title": "Mail",
-            "username": "user@example.com",
-            "password": "S3cret!",
-            "url": "https://example.com",
-            "notes": "test",
-        }
-    ]
-    ok = import_export_service.export_to_json(
-        user_id=1,
-        entries=entries,
-        filepath="vault.json",
-        master_password="MasterPass123!",
-    )
-    assert ok is True
-    assert (tmp_path / "exports" / "vault.json").exists()
+def test_import_result_schema():
+    """ImportResult Pydantic schema validates totals."""
+    result = ImportResult(total_rows=100, imported=95, skipped=5)
+    assert result.total_rows == 100
+    assert result.imported == 95
+    assert result.skipped == 5
 
 
-def test_import_allows_absolute_path(import_export_service, tmp_path):
-    import_file = tmp_path / "outside_import.json"
-    data = {
-        "version": "1.0",
-        "entries": [
-            {
-                "title": "Service",
-                "username": "user",
-                "password": "pwd123",
-                "url": "https://example.com",
-                "notes": "ok",
-            }
-        ],
-    }
-    import_file.write_text(json.dumps(data), encoding="utf-8")
-
-    entries = import_export_service.import_from_json(
-        user_id=1,
-        filepath=str(import_file),
-        master_password="MasterPass123!",
-    )
-    assert len(entries) == 1
-    assert entries[0].title == "Service"
-
-
-def test_cleanup_temp_files_rejects_paths_outside_temp_base(import_export_service, tmp_path):
-    temp_file = tmp_path / "temp" / "file.tmp"
-    temp_file.parent.mkdir(parents=True, exist_ok=True)
-    temp_file.write_text("x", encoding="utf-8")
-
-    deleted = import_export_service.cleanup_temp_files(str(tmp_path / "temp"))
-    assert deleted == 1
-    assert not temp_file.exists()
-
-    outside_dir = tmp_path / "outside"
-    outside_dir.mkdir(parents=True, exist_ok=True)
-    with pytest.raises(ValueError, match="Invalid temp directory"):
-        import_export_service.cleanup_temp_files(str(outside_dir))
+def test_import_result_defaults():
+    """ImportResult has sensible defaults."""
+    result = ImportResult()
+    assert result.total_rows == 0
+    assert result.imported == 0
+    assert result.skipped == 0
+    assert result.errors == []

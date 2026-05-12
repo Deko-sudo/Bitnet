@@ -30,17 +30,17 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
-import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.crypto_bridge import LockedBuffer, bridge, zeroize_mutable_buffer
-from backend.database.models import User, WebAuthnCredential
+from backend.core.security_utils import RateLimiter
+from backend.database.models import Fido2Challenge, User, WebAuthnCredential
 from backend.database.session import get_db
 
 try:
@@ -62,7 +62,7 @@ try:
         ResidentKeyRequirement,
         UserVerificationRequirement,
     )
-except ImportError:
+except ImportError:  # pragma: no cover — webauthn is optional
     raise RuntimeError(
         "webauthn>=2.0.0 is required for FIDO2 support. "
         "Install with: pip install webauthn>=2.0.0"
@@ -80,6 +80,9 @@ from backend.api.v1.endpoints.auth import (
 
 router = APIRouter()
 
+_fido2_register_rate_limiter = RateLimiter(max_attempts=5, window_seconds=300, block_duration_seconds=900)
+_fido2_login_rate_limiter = RateLimiter(max_attempts=10, window_seconds=60, block_duration_seconds=300)
+
 
 # ===========================================================================
 # Configuration
@@ -89,44 +92,6 @@ _FIDO2_RP_ID = os.getenv("BITNET_FIDO2_RP_ID", "localhost")
 _FIDO2_RP_NAME = os.getenv("BITNET_FIDO2_RP_NAME", "BitNet Vault")
 _FIDO2_ORIGIN = os.getenv("BITNET_FIDO2_ORIGIN", "http://localhost:3000")
 _FIDO2_CHALLENGE_TTL = int(os.getenv("BITNET_FIDO2_CHALLENGE_TTL", "300"))  # 5 min
-
-
-# ===========================================================================
-# In-memory challenge store (production: use Redis / Memcached)
-# ===========================================================================
-
-
-class _ChallengeStore:
-    """Thread-safe TTL-bounded challenge cache.
-
-    In production, replace with Redis with automatic expiry.
-    """
-
-    def __init__(self, ttl: int = 300):
-        self._store: dict[str, tuple[bytes, float]] = {}
-        self._ttl = ttl
-
-    def put(self, key: str, challenge: bytes) -> None:
-        self._cleanup()
-        self._store[key] = (challenge, time.monotonic())
-
-    def get(self, key: str) -> bytes:
-        entry = self._store.pop(key, None)
-        if entry is None:
-            raise KeyError(key)
-        challenge, timestamp = entry
-        if time.monotonic() - timestamp > self._ttl:
-            raise KeyError(f"Challenge expired: {key}")
-        return challenge
-
-    def _cleanup(self) -> None:
-        now = time.monotonic()
-        expired = [k for k, (_, ts) in self._store.items() if now - ts > self._ttl]
-        for k in expired:
-            del self._store[k]
-
-
-_challenge_store = _ChallengeStore(ttl=_FIDO2_CHALLENGE_TTL)
 
 
 # ===========================================================================
@@ -141,12 +106,14 @@ class RegistrationOptionsRequest(BaseModel):
     """
 
     label: Optional[str] = None  # Human-readable device name
+    authenticator_type: Literal["cross-platform", "platform"] = "cross-platform"
 
 
 class RegistrationVerifyRequest(BaseModel):
     """Client response after WebAuthn registration ceremony."""
 
     credential: dict[str, Any]  # PublicKeyCredential serialized by client
+    authenticator_type: Literal["cross-platform", "platform"] = "cross-platform"
 
 
 class LoginOptionsRequest(BaseModel):
@@ -247,6 +214,8 @@ async def _store_device_credential(
     sign_count: int,
     master_key: LockedBuffer,
     label: Optional[str] = None,
+    authenticator_type: str = "cross-platform",
+    is_biometric: bool = False,
 ) -> WebAuthnCredential:
     """Execute the **double-wrap** and persist the credential.
 
@@ -295,6 +264,8 @@ async def _store_device_credential(
             device_protector_nonce=protector_envelope.nonce,
             device_protector_tag=protector_envelope.tag,
             label=label,
+            authenticator_type=authenticator_type,
+            is_biometric=is_biometric,
         )
         db.add(credential)
         await db.commit()
@@ -304,12 +275,13 @@ async def _store_device_credential(
 
     finally:
         # Step 5: Zeroize everything
+        mk_envelope.zeroize()
+        protector_envelope.zeroize()
         if device_protector_buf is not None:
             zeroize_mutable_buffer(device_protector_buf)
         if device_protector_locked is not None:
             device_protector_locked.close()
-        if server_key is not None:
-            server_key.close()
+        # NOTE: server_key is the global cached _server_wrap_key — must NOT be closed
 
 
 def _unwrap_master_key_from_fido_credential(
@@ -353,8 +325,7 @@ def _unwrap_master_key_from_fido_credential(
     finally:
         if device_protector_locked is not None:
             device_protector_locked.close()
-        if server_key is not None:
-            server_key.close()
+        # NOTE: server_key is the global cached _server_wrap_key — must NOT be closed
 
 
 async def _issue_session_token(
@@ -364,8 +335,80 @@ async def _issue_session_token(
     """Generate a session token and store its hash on the user record."""
     token = secrets.token_urlsafe(32)
     user.session_token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    user.session_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     await db.commit()
     return token
+
+
+async def _delete_expired_challenges(db: AsyncSession) -> None:
+    stmt = delete(Fido2Challenge).where(Fido2Challenge.expires_at <= datetime.now(timezone.utc))
+    await db.execute(stmt)
+
+
+async def _persist_challenge(
+    db: AsyncSession,
+    *,
+    challenge_id: str,
+    challenge: bytes,
+    purpose: str,
+    user_id: Optional[int] = None,
+) -> None:
+    await _delete_expired_challenges(db)
+
+    existing = await db.get(Fido2Challenge, challenge_id)
+    if existing is not None:
+        await db.delete(existing)
+        await db.flush()
+
+    db.add(
+        Fido2Challenge(
+            id=challenge_id,
+            purpose=purpose,
+            user_id=user_id,
+            challenge=challenge,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=_FIDO2_CHALLENGE_TTL),
+        )
+    )
+    await db.commit()
+
+
+async def _consume_challenge(
+    db: AsyncSession,
+    *,
+    challenge_id: str,
+    purpose: str,
+    user_id: Optional[int] = None,
+) -> tuple[bytes, Optional[int]]:
+    await _delete_expired_challenges(db)
+
+    stmt = select(Fido2Challenge).where(
+        Fido2Challenge.id == challenge_id,
+        Fido2Challenge.purpose == purpose,
+    )
+    if user_id is not None:
+        stmt = stmt.where(Fido2Challenge.user_id == user_id)
+
+    result = await db.execute(stmt)
+    challenge_row = result.scalar_one_or_none()
+    if challenge_row is None:
+        await db.commit()
+        raise KeyError(challenge_id)
+
+    now = datetime.now(timezone.utc)
+    expires_at = challenge_row.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at <= now:
+        await db.delete(challenge_row)
+        await db.commit()
+        raise KeyError(challenge_id)
+
+    challenge = bytes(challenge_row.challenge)
+    challenge_user_id = challenge_row.user_id
+    await db.delete(challenge_row)
+    await db.commit()
+    return challenge, challenge_user_id
 
 
 # ===========================================================================
@@ -373,16 +416,52 @@ async def _issue_session_token(
 # ===========================================================================
 
 
+_trust_proxy = os.getenv("BITNET_TRUST_PROXY", "").lower() in ("1", "true", "yes")
+
+
+def _get_client_ip(request: Request) -> str:
+    if _trust_proxy:
+        return (
+            request.headers.get("X-Real-IP", "").strip()
+            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or (request.client.host if request.client else "unknown")
+        )
+    return request.client.host if request.client else "unknown"
+
+
 @router.post("/register/options", response_model=WebAuthnOptionsResponse)
-def registration_options(
+async def registration_options(
+    request: Request,
     req: RegistrationOptionsRequest,
+    db: AsyncSession = Depends(get_db),
     ctx: CryptoContext = Depends(get_current_user),
 ) -> WebAuthnOptionsResponse:
     """Generate WebAuthn registration options for an authenticated user.
 
     The client uses these options to call ``navigator.credentials.create()``.
     """
+    client_ip = _get_client_ip(request)
+    if not _fido2_register_rate_limiter.can_attempt(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many FIDO2 registration attempts. Please try again later.",
+            headers={"Retry-After": str(_fido2_register_rate_limiter.get_delay(client_ip))},
+        )
+
     user_id_bytes = ctx.user_id.to_bytes(8, byteorder="big")
+
+    if req.authenticator_type == "platform":
+        auth_selection = AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
+            resident_key=ResidentKeyRequirement.REQUIRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
+        )
+    else:
+        auth_selection = AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.CROSS_PLATFORM,
+            resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.PREFERRED,
+        )
 
     options = generate_registration_options(
         rp_id=_FIDO2_RP_ID,
@@ -390,16 +469,17 @@ def registration_options(
         user_id=user_id_bytes,
         user_name=ctx.username,
         user_display_name=ctx.username,
-        authenticator_selection=AuthenticatorSelectionCriteria(
-            authenticator_attachment=AuthenticatorAttachment.CROSS_PLATFORM,
-            resident_key=ResidentKeyRequirement.PREFERRED,
-            user_verification=UserVerificationRequirement.PREFERRED,
-        ),
+        authenticator_selection=auth_selection,
     )
 
-    # Store challenge for later verification
     challenge_id = f"reg:{ctx.user_id}"
-    _challenge_store.put(challenge_id, options.challenge)
+    await _persist_challenge(
+        db,
+        challenge_id=challenge_id,
+        challenge=options.challenge,
+        purpose="registration",
+        user_id=ctx.user_id,
+    )
 
     return WebAuthnOptionsResponse(
         challenge_id=challenge_id,
@@ -409,6 +489,7 @@ def registration_options(
 
 @router.post("/register/verify", status_code=status.HTTP_201_CREATED)
 async def registration_verify(
+    request: Request,
     req: RegistrationVerifyRequest,
     db: AsyncSession = Depends(get_db),
     ctx: CryptoContext = Depends(get_current_user),
@@ -420,11 +501,25 @@ async def registration_verify(
 
     Returns the credential ID (base64url) for the client to reference.
     """
+    client_ip = _get_client_ip(request)
+    if not _fido2_register_rate_limiter.can_attempt(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many FIDO2 registration attempts. Please try again later.",
+            headers={"Retry-After": str(_fido2_register_rate_limiter.get_delay(client_ip))},
+        )
+
     challenge_id = f"reg:{ctx.user_id}"
 
     try:
-        stored_challenge = _challenge_store.get(challenge_id)
+        stored_challenge, _ = await _consume_challenge(
+            db,
+            challenge_id=challenge_id,
+            purpose="registration",
+            user_id=ctx.user_id,
+        )
     except KeyError:
+        _fido2_register_rate_limiter.register_failed(client_ip)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Registration challenge expired or not found",
@@ -437,10 +532,11 @@ async def registration_verify(
             expected_rp_id=_FIDO2_RP_ID,
             expected_origin=_FIDO2_ORIGIN,
         )
-    except Exception as exc:
+    except Exception:
+        _fido2_register_rate_limiter.register_failed(client_ip)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"WebAuthn registration verification failed: {exc}",
+            detail="WebAuthn registration verification failed",
         )
 
     # Check for duplicate credential_id
@@ -450,6 +546,7 @@ async def registration_verify(
     result = await db.execute(stmt)
     existing = result.scalar_one_or_none()
     if existing is not None:
+        _fido2_register_rate_limiter.register_failed(client_ip)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This security key is already registered",
@@ -464,7 +561,11 @@ async def registration_verify(
         sign_count=verification.sign_count,
         master_key=ctx.master_key,
         label=None,
+        authenticator_type=req.authenticator_type,
+        is_biometric=(req.authenticator_type == "platform"),
     )
+
+    _fido2_register_rate_limiter.register_success(client_ip)
 
     return {
         "credential_id": bytes_to_base64url(credential.credential_id),
@@ -479,6 +580,7 @@ async def registration_verify(
 
 @router.post("/login/options", response_model=WebAuthnOptionsResponse)
 async def login_options(
+    request: Request,
     req: LoginOptionsRequest,
     db: AsyncSession = Depends(get_db),
 ) -> WebAuthnOptionsResponse:
@@ -487,17 +589,31 @@ async def login_options(
     Returns all registered credential IDs for this user so the client
     can present them to the authenticator.
     """
+    client_ip = _get_client_ip(request)
+    if not _fido2_login_rate_limiter.can_attempt(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many FIDO2 login attempts. Please try again later.",
+            headers={"Retry-After": str(_fido2_login_rate_limiter.get_delay(client_ip))},
+        )
+
     stmt_user = select(User).where(User.username == req.username)
     result_user = await db.execute(stmt_user)
     user = result_user.scalar_one_or_none()
     if user is None:
         # Fail silently to avoid user enumeration
-        # Return empty options
+        # Return empty options with a persisted, verifiable fake challenge.
         challenge_id = secrets.token_urlsafe(16)
-        _challenge_store.put(f"login:{challenge_id}", secrets.token_bytes(32))
+        fake_challenge = secrets.token_bytes(32)
+        await _persist_challenge(
+            db,
+            challenge_id=f"login:{challenge_id}",
+            challenge=fake_challenge,
+            purpose="login",
+        )
         return WebAuthnOptionsResponse(
             challenge_id=challenge_id,
-            options={"challenge": bytes_to_base64url(secrets.token_bytes(32))},
+            options={"challenge": bytes_to_base64url(fake_challenge)},
         )
 
     stmt_creds = select(WebAuthnCredential).where(WebAuthnCredential.user_id == user.id)
@@ -519,7 +635,13 @@ async def login_options(
     )
 
     challenge_id = secrets.token_urlsafe(16)
-    _challenge_store.put(f"login:{challenge_id}", options.challenge)
+    await _persist_challenge(
+        db,
+        challenge_id=f"login:{challenge_id}",
+        challenge=options.challenge,
+        purpose="login",
+        user_id=user.id,
+    )
 
     return WebAuthnOptionsResponse(
         challenge_id=challenge_id,
@@ -529,6 +651,7 @@ async def login_options(
 
 @router.post("/login/verify", response_model=LoginResponse)
 async def login_verify(
+    request: Request,
     req: LoginVerifyRequest,
     db: AsyncSession = Depends(get_db),
 ) -> LoginResponse:
@@ -544,11 +667,24 @@ async def login_verify(
     6. Issue session token.
     7. Close master_key.
     """
+    client_ip = _get_client_ip(request)
+    if not _fido2_login_rate_limiter.can_attempt(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many FIDO2 login attempts. Please try again later.",
+            headers={"Retry-After": str(_fido2_login_rate_limiter.get_delay(client_ip))},
+        )
+
     challenge_id = f"login:{req.challenge_id}"
 
     try:
-        stored_challenge = _challenge_store.get(challenge_id)
+        stored_challenge, challenge_user_id = await _consume_challenge(
+            db,
+            challenge_id=challenge_id,
+            purpose="login",
+        )
     except KeyError:
+        _fido2_login_rate_limiter.register_failed(client_ip)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Login challenge expired or not found",
@@ -557,17 +693,33 @@ async def login_verify(
     # Extract credential_id from the assertion to look up the stored public key
     raw_id = req.credential.get("rawId") or req.credential.get("id")
     if not raw_id:
+        _fido2_login_rate_limiter.register_failed(client_ip)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing credential ID in assertion",
         )
 
-    credential_id = base64url_to_bytes(raw_id)
+    try:
+        credential_id = base64url_to_bytes(raw_id)
+    except Exception:
+        _fido2_login_rate_limiter.register_failed(client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid credential ID format",
+        )
 
     stmt_cred = select(WebAuthnCredential).where(WebAuthnCredential.credential_id == credential_id)
     result_cred = await db.execute(stmt_cred)
     stored_cred = result_cred.scalar_one_or_none()
     if stored_cred is None:
+        _fido2_login_rate_limiter.register_failed(client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unknown security key",
+        )
+
+    if challenge_user_id != stored_cred.user_id:
+        _fido2_login_rate_limiter.register_failed(client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unknown security key",
@@ -583,10 +735,11 @@ async def login_verify(
             credential_public_key=stored_cred.public_key,
             credential_current_sign_count=stored_cred.sign_count,
         )
-    except Exception as exc:
+    except Exception:
+        _fido2_login_rate_limiter.register_failed(client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"WebAuthn assertion verification failed: {exc}",
+            detail="WebAuthn assertion verification failed",
         )
 
     # Update sign count
@@ -612,6 +765,8 @@ async def login_verify(
     finally:
         # Always close the master key — even if token issuance fails
         master_key.close()
+
+    _fido2_login_rate_limiter.register_success(client_ip)
 
     return LoginResponse(
         access_token=token,
@@ -666,6 +821,59 @@ async def delete_credential(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credential not found",
+        )
+
+    await db.delete(credential)
+    await db.commit()
+
+
+@router.get("/biometric/status")
+async def biometric_status(
+    db: AsyncSession = Depends(get_db),
+    ctx: CryptoContext = Depends(get_current_user),
+):
+    """Check if the user has enrolled platform biometric credentials."""
+    stmt = select(WebAuthnCredential).where(
+        WebAuthnCredential.user_id == ctx.user_id,
+        WebAuthnCredential.is_biometric == True,
+    )
+    result = await db.execute(stmt)
+    credentials = result.scalars().all()
+    return {
+        "enrolled": len(credentials) > 0,
+        "credentials": [
+            {
+                "id": bytes_to_base64url(c.credential_id),
+                "label": c.label,
+                "authenticator_type": c.authenticator_type,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            for c in credentials
+        ],
+    }
+
+
+@router.delete("/biometric/unregister/{credential_id_b64}", status_code=status.HTTP_204_NO_CONTENT)
+async def unregister_biometric(
+    credential_id_b64: str,
+    db: AsyncSession = Depends(get_db),
+    ctx: CryptoContext = Depends(get_current_user),
+) -> None:
+    """Unregister a biometric credential. Only removes platform-type credentials."""
+    credential_id = base64url_to_bytes(credential_id_b64)
+
+    stmt = select(WebAuthnCredential).where(
+        WebAuthnCredential.credential_id == credential_id,
+        WebAuthnCredential.user_id == ctx.user_id,
+    )
+    result = await db.execute(stmt)
+    credential = result.scalar_one_or_none()
+    if credential is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
+    if not credential.is_biometric:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credential is not a biometric (platform) credential",
         )
 
     await db.delete(credential)

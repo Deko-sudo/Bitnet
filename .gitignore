@@ -15,6 +15,9 @@ env/
 # PyPy
 pypy3_*/
 
+# Rust build
+target/
+
 # IDE
 .idea/
 .vscode/
@@ -23,25 +26,43 @@ pypy3_*/
 # Testing
 .coverage
 htmlcov/
+.hypothesis/
+bandit_report.json
+coverage*.txt
+coverage.xml
+bandit_output.txt
 
 # Logs and Data
 *.log
 *.db
 *.sqlite
+*.db-shm
+*.db-wal
+
+# Backups (user data)
+backups/
 
 # Secrets
 secrets/
 *.key
+*.pem
 server_key.txt
 .env
-*.key
-*.pem
-secrets/
 
 # OS
 .DS_Store
 Thumbs.db
 
-check-error.md
-
+# AI / Prompt artifacts
 .qwen
+.pi/
+PROMPT_KIMI*
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# PyInstaller output
+installer/dist/
+
+check-error.md

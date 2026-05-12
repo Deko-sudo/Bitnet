@@ -87,5 +87,5 @@ def apply_windows_acl(db_path: Path) -> bool:
             check=False,
         )
         return result.returncode == 0
-    except FileNotFoundError:
+    except FileNotFoundError:  # pragma: no cover — PowerShell not available on non-Windows
         return False  # PowerShell not available (e.g., Linux/macOS)

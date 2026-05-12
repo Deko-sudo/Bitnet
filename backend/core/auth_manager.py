@@ -15,6 +15,7 @@ Version: 2.0
 
 import threading
 import time
+import warnings
 from contextlib import contextmanager
 from typing import Optional, Callable, Any, Literal, Iterator
 from dataclasses import dataclass, field
@@ -334,6 +335,8 @@ class AuthManager:
             if self._session_wrap_key is not None:
                 zero_memory(self._session_wrap_key)
                 self._session_wrap_key = None
+            if self._wrapped_master_key is not None:
+                zero_memory(self._wrapped_master_key)
             self._wrapped_master_key = None
 
             # Update state
@@ -458,6 +461,62 @@ class AuthManager:
             subkey_ref = locals().get("subkey")
             if subkey_ref is not None:
                 zero_memory(subkey_ref)
+
+    def get_master_key(self) -> bytearray:
+        """
+        Return the master key as a mutable buffer.
+
+        .. deprecated::
+            Use :meth:`with_master_key` for automatic zeroing.
+        """
+        warnings.warn(
+            "get_master_key() is deprecated. Use 'with_master_key()' context manager instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with self._lock:
+            if self._state.is_locked:
+                raise AlreadyLockedError("Session is locked")
+            if self._retain_master_key_in_session:
+                if self._wrapped_master_key is None or self._session_wrap_key is None:
+                    raise AlreadyLockedError("Master key not available")
+                unwrapped = self._crypto.decrypt(
+                    self._wrapped_master_key,
+                    bytes(self._session_wrap_key),
+                )
+                return bytearray(unwrapped)
+            return self._get_provider_key()
+
+    def get_derived_key(self, context: bytes) -> bytearray:
+        """
+        Derive and return a subkey for *context*.
+
+        .. deprecated::
+            Use :meth:`with_derived_key` for automatic zeroing.
+        """
+        warnings.warn(
+            "get_derived_key() is deprecated. Use 'with_derived_key()' context manager instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with self._lock:
+            if self._state.is_locked:
+                raise AlreadyLockedError("Session is locked")
+            if self._retain_master_key_in_session:
+                if self._wrapped_master_key is None or self._session_wrap_key is None:
+                    raise AlreadyLockedError("Master key not available")
+                unwrapped = self._crypto.decrypt(
+                    self._wrapped_master_key,
+                    bytes(self._session_wrap_key),
+                )
+                master_key = bytearray(unwrapped)
+            else:
+                master_key = self._get_provider_key()
+        try:
+            subkey = bytearray(self._crypto.derive_subkey(bytes(master_key), context))
+            return subkey
+        finally:
+            zero_memory(master_key)
 
     def _get_provider_key(self) -> bytearray:
         """Resolve and validate provider key for ephemeral mode operations."""

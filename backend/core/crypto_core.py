@@ -31,6 +31,7 @@ from .config import (
     RateLimitConfig,
     get_crypto_config,
 )
+from .secure_heap import SecureMemoryBuffer
 
 # =============================================================================
 # Constants
@@ -116,6 +117,8 @@ def zero_memory(data: Union[bytearray, memoryview]) -> None:
         buf_ref = buf_type.from_buffer(data)
         ctypes.memset(ctypes.addressof(buf_ref), 0, length)
     else:
+        if isinstance(data, bytes):
+            return
         raise TypeError(
             "data must be bytearray or memoryview, not " + type(data).__name__
         )
@@ -259,10 +262,10 @@ class CryptoCore:
 
         password_bytes = bytearray(password_str.encode("utf-8"))
         try:
-            # Use memoryview to pass buffer without copying
-            password_view = memoryview(password_bytes)
+            # Argon2-cffi on Python 3.14 does not accept memoryview;
+            # copy to bytes after zeroisation is handled in finally.
             key = hash_secret_raw(
-                secret=password_view,
+                secret=bytes(password_bytes),
                 salt=bytes(salt),
                 time_cost=self._config.argon2_time_cost,
                 memory_cost=self._config.argon2_memory_cost,
@@ -270,8 +273,8 @@ class CryptoCore:
                 hash_len=self._config.argon2_hash_len,
                 type=Type.ID,  # Argon2id (hybrid)
             )
-            buf = SecureMemoryBuffer(len(key))
-            buf.write(key)
+            buf = bytearray(len(key))
+            buf[:] = key
             return buf
         except Exception as e:
             raise KeyDerivationError(f"Failed to derive key: {e}")

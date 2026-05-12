@@ -61,11 +61,16 @@ def zeroize_mutable_buffer(value: MutableBuffer) -> None:
     ctypes.memset(ctypes.addressof(c_buffer), 0, len(view))
 
 
-@dataclass(frozen=True)
+@dataclass
 class AesGcmEnvelope:
     ciphertext: bytes
     nonce: bytes
     tag: bytes
+
+    def zeroize(self) -> None:
+        object.__setattr__(self, 'ciphertext', b'\x00' * len(self.ciphertext))
+        object.__setattr__(self, 'nonce', b'\x00' * len(self.nonce))
+        object.__setattr__(self, 'tag', b'\x00' * len(self.tag))
 
 
 class RustCryptoBridge:

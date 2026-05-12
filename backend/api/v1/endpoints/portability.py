@@ -29,8 +29,11 @@ from backend.database.session import get_db
 from backend.services.import_export import (
     DataPortabilityService,
     ImportDatabaseError,
+    ImportValidationError,
     ImportResult,
 )
+
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
 
 router = APIRouter()
 
@@ -87,24 +90,29 @@ async def import_csv(
             detail="Content-Type must be text/csv",
         )
 
-    content = await file.read()
-    if len(content) == 0:
+    content = await file.read(MAX_UPLOAD_SIZE + 1)
+    if len(content) > MAX_UPLOAD_SIZE:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File is empty",
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024*1024)}MB",
         )
 
     try:
-        result = await service.import_from_csv(ctx.user_id, content)
+        result = await service.import_from_csv(ctx.user_id, file)
+    except ImportValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid import file",
+        ) from exc
     except ImportDatabaseError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database error during import: {exc}",
+            detail="Database error during import",
         ) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected database error: {exc}",
+            detail="Unexpected database error",
         ) from exc
 
     return result
@@ -138,24 +146,29 @@ async def import_jsonl(
     {"title": "GitHub", "password": "gh_token_123"}
     ```
     """
-    content = await file.read()
-    if len(content) == 0:
+    content = await file.read(MAX_UPLOAD_SIZE + 1)
+    if len(content) > MAX_UPLOAD_SIZE:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File is empty",
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024*1024)}MB",
         )
 
     try:
-        result = await service.import_from_jsonl(ctx.user_id, content)
+        result = await service.import_from_jsonl(ctx.user_id, file)
+    except ImportValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid import file",
+        ) from exc
     except ImportDatabaseError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database error during import: {exc}",
+            detail="Database error during import",
         ) from exc
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected database error: {exc}",
+            detail="Unexpected database error",
         ) from exc
 
     return result

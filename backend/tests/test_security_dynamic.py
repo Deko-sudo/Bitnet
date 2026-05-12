@@ -43,7 +43,7 @@ class TestSQLInjection:
         user_id = "1 OR 1=1 --"
         
         # Vulnerable query (DO NOT USE!)
-        vulnerable_query = f"SELECT * FROM users WHERE id = {user_id}"
+        vulnerable_query = f"SELECT * FROM users WHERE id = {user_id}"  # nosec B608 — intentional SQL injection demo, not real query
         
         # This query would return ALL users
         assert "1 OR 1=1" in vulnerable_query

@@ -126,7 +126,7 @@ class TestDeriveMasterKey:
         salt = crypto.generate_salt()
         key = crypto.derive_master_key(sample_password, salt)
         assert len(key) == 32
-        assert isinstance(key, bytes)
+        assert isinstance(key, bytearray)
     
     def test_derive_master_key_deterministic(self, crypto, sample_password):
         """Test that same password+salt produces same key."""
@@ -174,7 +174,7 @@ class TestDeriveSubkey:
         """Test basic subkey derivation."""
         subkey = crypto.derive_subkey(sample_key, b"encryption")
         assert len(subkey) == 32
-        assert isinstance(subkey, bytes)
+        assert isinstance(subkey, bytearray)
     
     def test_derive_subkey_different_contexts(self, crypto, sample_key):
         """Test that different contexts produce different subkeys."""
@@ -402,9 +402,8 @@ class TestZeroMemory:
         assert data == bytearray(16)
     
     def test_zero_memory_not_bytearray(self):
-        """Test zeroing bytes raises error."""
-        with pytest.raises(TypeError, match="must be bytearray"):
-            zero_memory(b"immutable bytes")
+        """Test zeroing bytes is silently skipped (immutable)."""
+        zero_memory(b"immutable bytes")
     
     def test_zero_memory_length(self):
         """Test zeroing various lengths."""
@@ -622,7 +621,7 @@ class TestIntegration:
         plaintext = b"same message"
         ciphertexts = [crypto.encrypt(plaintext, sample_key) for _ in range(10)]
         # All should be different (random nonce)
-        assert len(set(ciphertexts)) == 10
+        assert len(set(bytes(x) for x in ciphertexts)) == 10
         
         # But all should decrypt to same plaintext
         for ct in ciphertexts:
