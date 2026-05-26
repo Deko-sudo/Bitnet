@@ -10,10 +10,6 @@ obj/
 *.user
 *.suo
 *.cache
-*.dll
-*.exe
-!BitNet.Desktop/Native/*.dll
-!BitNet.Desktop/Native/*.exe
 
 # IDE
 .vscode/
@@ -34,3 +30,7 @@ Thumbs.db
 # Temporary test files
 *.bitnet
 fuzz_temp*.bitnet
+
+# Native binaries (build artifacts, not source)
+*.dll
+*.exe
