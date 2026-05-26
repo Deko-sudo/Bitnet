@@ -1,0 +1,18 @@
+[package]
+name = "bitnet-ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+serde_json = { workspace = true }
+bitnet-crypto = { workspace = true }
+bitnet-core = { workspace = true }
+bitnet-kdbx = { workspace = true }
+libc = { workspace = true }
+zeroize = { workspace = true }
+rand = { workspace = true }

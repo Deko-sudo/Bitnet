@@ -1,0 +1,369 @@
+﻿use bitnet_crypto::PasswordGeneratorFlags;
+use bitnet_core::SessionManager;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "bitnet-cli")]
+#[command(about = "BitNet Password Manager CLI")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Unlock a vault file
+    Unlock {
+        /// Path to vault file
+        path: String,
+    },
+    /// Lock the current vault
+    Lock,
+    /// List all entries
+    List,
+    /// Get password for an entry
+    Get {
+        /// Entry UUID (hex)
+        uuid: String,
+    },
+    /// Get TOTP code for an entry
+    Totp {
+        /// Entry UUID (hex)
+        uuid: String,
+    },
+    /// Generate a random password
+    Generate {
+        /// Password length
+        #[arg(short, long, default_value_t = 16)]
+        length: usize,
+        /// Include uppercase letters
+        #[arg(long, default_value_t = true)]
+        uppercase: bool,
+        /// Include lowercase letters
+        #[arg(long, default_value_t = true)]
+        lowercase: bool,
+        /// Include digits
+        #[arg(long, default_value_t = true)]
+        digits: bool,
+        /// Include symbols
+        #[arg(long, default_value_t = true)]
+        symbols: bool,
+        /// Exclude ambiguous characters
+        #[arg(long, default_value_t = false)]
+        ambiguous: bool,
+    },
+    /// Show vault file fingerprint (SHA-256)
+    Info {
+        /// Path to vault file
+        path: String,
+    },
+    /// Create a new vault
+    Create {
+        /// Path to new vault file
+        path: String,
+    },
+}
+
+fn validate_vault_path(path: &str) -> bool {
+    path.ends_with(".bitnet") && !path.contains("..")
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let manager = SessionManager::new();
+
+    match cli.command {
+        Commands::Unlock { path } => {
+            if !validate_vault_path(&path) {
+                eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
+                return;
+            }
+            let password = rpassword::prompt_password("Master password: ").unwrap();
+            match manager.unlock(&path, password.as_bytes()) {
+                Ok(()) => println!("Vault unlocked successfully."),
+                Err(e) => eprintln!("Failed to unlock vault: {}", e),
+            }
+        }
+        Commands::Lock => {
+            manager.lock();
+            println!("Vault locked.");
+        }
+        Commands::List => {
+            match manager.list_entries() {
+                Ok(entries) => {
+                    for entry in entries {
+                        let totp_indicator = if entry.has_totp { " [TOTP]" } else { "" };
+                        println!("{} - {}{}", hex_uuid(&entry.uuid), entry.title, totp_indicator);
+                    }
+                }
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Get { uuid } => {
+            let uuid_bytes = match parse_hex_uuid(&uuid) {
+                Some(u) => u,
+                None => {
+                    eprintln!("Invalid UUID format");
+                    return;
+                }
+            };
+            match manager.get_password(&uuid_bytes) {
+                Ok(password) => println!("{}", password.as_str()),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Totp { uuid } => {
+            let uuid_bytes = match parse_hex_uuid(&uuid) {
+                Some(u) => u,
+                None => {
+                    eprintln!("Invalid UUID format");
+                    return;
+                }
+            };
+            match manager.get_totp(&uuid_bytes) {
+                Ok(Some((code, remaining))) => {
+                    println!("Code: {} (expires in {}s)", code, remaining);
+                }
+                Ok(None) => println!("No TOTP configured for this entry."),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Generate {
+            length,
+            uppercase,
+            lowercase,
+            digits,
+            symbols,
+            ambiguous,
+        } => {
+            let flags = PasswordGeneratorFlags {
+                length,
+                include_uppercase: uppercase,
+                include_lowercase: lowercase,
+                include_digits: digits,
+                include_symbols: symbols,
+                exclude_ambiguous: ambiguous,
+            };
+            match manager.generate_password(&flags) {
+                Ok(pwd) => println!("{}", pwd),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Info { path } => {
+            if !validate_vault_path(&path) {
+                eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
+                return;
+            }
+            match std::fs::read(&path) {
+                Ok(data) => {
+                    let hash = bitnet_crypto::sha256(&data);
+                    println!("Fingerprint (SHA-256): {}", hex_encode(&hash));
+                }
+                Err(e) => eprintln!("Failed to read file: {}", e),
+            }
+        }
+        Commands::Create { path } => {
+            if !validate_vault_path(&path) {
+                eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
+                return;
+            }
+            let password = rpassword::prompt_password("Set master password: ").unwrap();
+            let confirm = rpassword::prompt_password("Confirm master password: ").unwrap();
+            if password != confirm {
+                eprintln!("Passwords do not match.");
+                return;
+            }
+            let root = bitnet_kdbx::Group {
+                uuid: [0u8; 16],
+                name: "Root".to_string(),
+                children: vec![],
+                entries: vec![],
+            };
+            match bitnet_kdbx::save_vault(&path, &[root], password.as_bytes()) {
+                Ok(()) => println!("Vault created at {}", path),
+                Err(e) => eprintln!("Failed to create vault: {}", e),
+            }
+        }
+    }
+}
+
+fn parse_hex_uuid(s: &str) -> Option<[u8; 16]> {
+    let clean = s.replace("-", "");
+    if clean.len() != 32 {
+        return None;
+    }
+    let mut uuid = [0u8; 16];
+    for i in 0..16 {
+        uuid[i] = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(uuid)
+}
+
+fn hex_uuid(uuid: &[u8; 16]) -> String {
+    uuid.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitnet_core::SessionManager;
+
+    #[test]
+    fn test_parse_hex_uuid_valid() {
+        let uuid = parse_hex_uuid("550e8400e29b41d4a716446655440000").unwrap();
+        assert_eq!(uuid.len(), 16);
+        assert_eq!(hex_uuid(&uuid), "550e8400e29b41d4a716446655440000");
+    }
+
+    #[test]
+    fn test_parse_hex_uuid_with_dashes() {
+        let uuid = parse_hex_uuid("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(hex_uuid(&uuid), "550e8400e29b41d4a716446655440000");
+    }
+
+    #[test]
+    fn test_parse_hex_uuid_invalid_length() {
+        assert!(parse_hex_uuid("too-short").is_none());
+        assert!(parse_hex_uuid(&"a".repeat(33)).is_none());
+    }
+
+    #[test]
+    fn test_parse_hex_uuid_invalid_chars() {
+        assert!(parse_hex_uuid("gggggggggggggggggggggggggggggggg").is_none());
+    }
+
+    #[test]
+    fn test_hex_encode() {
+        assert_eq!(hex_encode(b"hello"), "68656c6c6f");
+        assert_eq!(hex_encode(b""), "");
+    }
+
+    #[test]
+    fn test_create_and_unlock_vault() {
+        let path = "test_cli_vault.bitnet";
+        let password = b"cli_test_password";
+
+        let root = bitnet_kdbx::Group {
+            uuid: [0u8; 16],
+            name: "Root".into(),
+            children: vec![],
+            entries: vec![bitnet_kdbx::Entry {
+                uuid: [1u8; 16],
+                title: "TestEntry".into(),
+                username: "testuser".into(),
+                password: zeroize::Zeroizing::new("testpass123".into()),
+                url: "https://example.com".into(),
+                notes: "".into(),
+                totp_secret: Some(zeroize::Zeroizing::new("JBSWY3DPEHPK3PXP".into())),
+            }],
+        };
+        bitnet_kdbx::save_vault(path, &[root], password).unwrap();
+
+        let manager = SessionManager::new();
+        manager.unlock(path, password).unwrap();
+        assert_eq!(manager.state(), bitnet_core::SessionState::Unlocked);
+
+        let entries = manager.list_entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].title, "TestEntry");
+        assert_eq!(entries[0].username, "testuser");
+        assert!(entries[0].has_totp);
+
+        let pwd = manager.get_password(&[1u8; 16]).unwrap();
+        assert_eq!(pwd.as_str(), "testpass123");
+
+        let totp = manager.get_totp(&[1u8; 16]).unwrap();
+        assert!(totp.is_some());
+        let (code, remaining) = totp.unwrap();
+        assert_eq!(code.len(), 6);
+        assert!(remaining <= 30);
+
+        manager.lock();
+        assert_eq!(manager.state(), bitnet_core::SessionState::Locked);
+
+        let data = std::fs::read(path).unwrap();
+        let hash = bitnet_crypto::sha256(&data);
+        let hex = hex_encode(&hash);
+        assert_eq!(hex.len(), 64);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_password_generator_flags() {
+        let flags = PasswordGeneratorFlags {
+            length: 20,
+            include_uppercase: true,
+            include_lowercase: true,
+            include_digits: true,
+            include_symbols: false,
+            exclude_ambiguous: true,
+        };
+        let pwd = bitnet_crypto::generate_password(&flags);
+        assert_eq!(pwd.len(), 20);
+        assert!(!pwd.chars().any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)));
+    }
+
+    #[test]
+    fn test_cli_info_fingerprint() {
+        let path = "test_info.bitnet";
+        let root = bitnet_kdbx::Group {
+            uuid: [0u8; 16],
+            name: "Root".into(),
+            children: vec![],
+            entries: vec![],
+        };
+        bitnet_kdbx::save_vault(path, &[root], b"password").unwrap();
+        let data = std::fs::read(path).unwrap();
+        let hash = bitnet_crypto::sha256(&data);
+        let hex = hex_encode(&hash);
+        assert_eq!(hex.len(), 64);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_cli_create_command() {
+        let path = "test_create_cmd.bitnet";
+        let root = bitnet_kdbx::Group {
+            uuid: [0u8; 16],
+            name: "Root".into(),
+            children: vec![],
+            entries: vec![bitnet_kdbx::Entry {
+                uuid: [1u8; 16],
+                title: "Email".into(),
+                username: "user".into(),
+                password: zeroize::Zeroizing::new("pass".into()),
+                url: "".into(),
+                notes: "".into(),
+                totp_secret: None,
+            }],
+        };
+        bitnet_kdbx::save_vault(path, &[root], b"masterpass").unwrap();
+        let loaded = bitnet_kdbx::load_vault(path, b"masterpass").unwrap();
+        assert_eq!(loaded[0].entries.len(), 1);
+        assert_eq!(loaded[0].entries[0].title, "Email");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_totp_sha256_roundtrip() {
+        use bitnet_totp::{TotpAlgorithm, generate_totp, verify_totp};
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        let now = 59u64;
+        let (code, _) = generate_totp(secret, now, TotpAlgorithm::Sha256).unwrap();
+        assert_eq!(code.len(), 6);
+        assert!(verify_totp(secret, now, &code, TotpAlgorithm::Sha256).unwrap());
+    }
+}
+
+    #[test]
+    fn test_validate_vault_path_cli() {
+        assert!(validate_vault_path("C:\\Users\\user\\vault.bitnet"));
+        assert!(!validate_vault_path("C:\\Windows\\System32\\config\\SAM"));
+        assert!(!validate_vault_path("C:\\Users\\..\\vault.bitnet"));
+        assert!(!validate_vault_path("C:\\Users\\vault.txt"));
+    }

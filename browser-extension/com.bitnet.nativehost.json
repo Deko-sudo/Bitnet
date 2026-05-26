@@ -1,0 +1,12 @@
+{
+  "name": "com.bitnet.nativehost",
+  "description": "BitNet Password Manager Native Host",
+  "path": "REPLACE_WITH_ABSOLUTE_PATH_TO_BITNET_NATIVE_HOST_EXE",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*/"
+  ],
+  "allowed_extensions": [
+    "bitnet@bitnet.dev"
+  ]
+}

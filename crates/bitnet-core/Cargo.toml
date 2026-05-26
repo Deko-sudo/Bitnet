@@ -1,0 +1,16 @@
+[package]
+name = "bitnet-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+bitnet-crypto = { workspace = true }
+bitnet-kdbx = { workspace = true }
+bitnet-totp = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+uuid = { workspace = true }

@@ -1,0 +1,24 @@
+﻿[package]
+name = "bitnet-fuzz"
+version = "0.1.0"
+edition = "2021"
+authors = ["BitNet Team"]
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bitnet-kdbx = { path = "../crates/bitnet-kdbx" }
+bitnet-crypto = { path = "../crates/bitnet-crypto" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "kdbx_deserialize"
+path = "fuzz_targets/kdbx_deserialize.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = true
+overflow-checks = true

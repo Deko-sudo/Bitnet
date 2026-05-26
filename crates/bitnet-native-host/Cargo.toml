@@ -1,0 +1,17 @@
+﻿[package]
+name = "bitnet-native-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bitnet-native-host"
+path = "src/main.rs"
+
+[dependencies]
+bitnet-ffi = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

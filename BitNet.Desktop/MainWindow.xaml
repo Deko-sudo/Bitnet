@@ -1,0 +1,52 @@
+<Window
+    x:Class="BitNet.Desktop.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:BitNet.Desktop"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="BitNet Password Manager">
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Title Bar Area with Mica -->
+        <Grid x:Name="TitleBarGrid" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}" Height="48">
+            <TextBlock Text="BitNet Password Manager" 
+                      Style="{StaticResource CaptionTextBlockStyle}"
+                      VerticalAlignment="Center"
+                      Margin="16,0,0,0"
+                      FontWeight="SemiBold"/>
+        </Grid>
+
+        <NavigationView Grid.Row="1" x:Name="NavView" 
+                        PaneDisplayMode="LeftCompact"
+                        IsBackButtonVisible="Collapsed"
+                        IsSettingsVisible="False"
+                        Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}"
+                        SelectionChanged="NavView_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="Vault" Tag="vault">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8B7;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Generator" Tag="generator">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9A1;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Settings" Tag="settings">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <Frame x:Name="ContentFrame" Margin="12"/>
+        </NavigationView>
+    </Grid>
+</Window>

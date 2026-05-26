@@ -1,0 +1,36 @@
+﻿# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# WinUI 3 / .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dll
+*.exe
+!BitNet.Desktop/Native/*.dll
+!BitNet.Desktop/Native/*.exe
+
+# IDE
+.vscode/
+.idea/
+*.sln
+
+# Fuzz
+corpus/
+artifacts/
+
+# E2E
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary test files
+*.bitnet
+fuzz_temp*.bitnet

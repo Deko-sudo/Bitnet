@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { width: 300px; max-height: 400px; padding: 12px; font-family: sans-serif; margin: 0; }
+    h1 { font-size: 16px; margin: 0 0 10px; }
+    .status { padding: 8px; border-radius: 4px; margin-bottom: 10px; font-size: 13px; }
+    .locked { background: #fee; color: #900; }
+    .unlocked { background: #efe; color: #090; }
+    .entry { padding: 6px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 13px; }
+    .entry:hover { background: #f5f5f5; }
+    .entry-title { font-weight: bold; }
+    .entry-url { color: #666; font-size: 11px; }
+    button { width: 100%; padding: 6px; margin-top: 8px; cursor: pointer; }
+    #entries { max-height: 240px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>BitNet</h1>
+  <div id="status" class="status locked">Checking...</div>
+  <div id="entries"></div>
+  <button id="refresh">Refresh</button>
+  <script src="popup.js"></script>
+</body>
+</html>

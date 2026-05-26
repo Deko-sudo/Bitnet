@@ -1,0 +1,130 @@
+<Page
+    x:Class="BitNet.Desktop.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    
+    <Grid MaxWidth="640" HorizontalAlignment="Center" Margin="24">
+        <StackPanel Spacing="24">
+            <TextBlock Text="Settings"
+                       Style="{StaticResource TitleLargeTextBlockStyle}">
+                <TextBlock.Transitions>
+                    <TransitionCollection/>
+                </TextBlock.Transitions>
+            </TextBlock>
+            
+            <!-- Security Section -->
+            <Grid Padding="20"
+                   Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                   CornerRadius="8">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Security"
+                               Style="{StaticResource SubtitleTextBlockStyle}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    
+                    <ToggleSwitch x:Name="AutoLockToggle"
+                                  Header="Auto-lock after inactivity"
+                                  IsOn="True">
+                        <ToggleSwitch.Transitions>
+                            <TransitionCollection/>
+                        </ToggleSwitch.Transitions>
+                    </ToggleSwitch>
+                    
+                    <Slider x:Name="AutoLockSlider"
+                             Header="Auto-lock timeout (minutes)"
+                             Minimum="1"
+                             Maximum="30"
+                             Value="5"
+                             StepFrequency="1"
+                             TickFrequency="5"
+                             TickPlacement="Outside"
+                             ValueChanged="AutoLockSlider_ValueChanged"/>
+                    
+                    <TextBlock x:Name="AutoLockValueLabel"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    
+                    <Button x:Name="LockNowButton"
+                            Content="Lock Vault Now"
+                            Click="LockNow_Click"
+                            HorizontalAlignment="Left">
+                        <Button.Icon>
+                            <FontIcon Glyph="&#xE72E;"/>
+                        </Button.Icon>
+                    </Button>
+                </StackPanel>
+            </Grid>
+            
+            <!-- Appearance Section -->
+            <Grid Padding="20"
+                   Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                   CornerRadius="8">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Appearance"
+                               Style="{StaticResource SubtitleTextBlockStyle}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    
+                    <TextBlock Text="Theme"
+                               Style="{StaticResource BodyStrongTextBlockStyle}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    
+                    <RadioButtons x:Name="ThemeRadioButtons"
+                                  SelectedIndex="0">
+                        <RadioButton Content="System default"/>
+                        <RadioButton Content="Light"/>
+                        <RadioButton Content="Dark"/>
+                    </RadioButtons>
+                </StackPanel>
+            </Grid>
+            
+            <!-- About Section -->
+            <Grid Padding="20"
+                   Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                   CornerRadius="8">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="About BitNet"
+                               Style="{StaticResource SubtitleTextBlockStyle}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    
+                    <TextBlock Text="Version 0.1.0"
+                               Style="{StaticResource BodyTextBlockStyle}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    
+                    <TextBlock Text="Zero Trust Password Manager"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    
+                    <TextBlock Text="Offline. Encrypted. Yours."
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Grid>
+</Page>

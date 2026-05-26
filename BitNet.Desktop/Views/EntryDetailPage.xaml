@@ -1,0 +1,212 @@
+<Page
+    x:Class="BitNet.Desktop.Views.EntryDetailPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    
+    <ScrollViewer>
+        <Grid MaxWidth="640" HorizontalAlignment="Center" Margin="24">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            
+            <!-- Header -->
+            <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,20">
+                <TextBlock x:Name="TitleBlock"
+                           Style="{StaticResource TitleLargeTextBlockStyle}"
+                           FontWeight="Bold"/>
+                <TextBlock x:Name="UrlBlock"
+                           Style="{StaticResource BodyTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextDecorations="Underline">
+                </TextBlock>
+            </StackPanel>
+            
+            <!-- Username -->
+            <TextBox x:Name="UsernameBox"
+                     Grid.Row="1"
+                     Header="Username"
+                     IsReadOnly="True"
+                     Margin="0,0,0,12">
+                <TextBox.RightHeader>
+                    <Button Content="Copy"
+                            Click="CopyUsername_Click"
+                            Style="{StaticResource SubtleButtonStyle}">
+                        <Button.Icon>
+                            <FontIcon Glyph="&#xE8C8;"/>
+                        </Button.Icon>
+                    </Button>
+                </TextBox.RightHeader>
+            </TextBox>
+            
+            <!-- Password -->
+            <Grid Grid.Row="2" Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <PasswordBox x:Name="PasswordHiddenBox"
+                              Header="Password"
+                              IsEnabled="False"
+                              Password="********">
+                    <PasswordBox.RightHeader>
+                        <Button x:Name="RevealButton"
+                                Click="RevealButton_Click"
+                                Style="{StaticResource SubtleButtonStyle}">
+                            <Button.Icon>
+                                <FontIcon x:Name="RevealIcon" Glyph="&#xE7B3;"/>
+                            </Button.Icon>
+                        </Button>
+                    </PasswordBox.RightHeader>
+                </PasswordBox>
+                
+                <TextBox x:Name="PasswordVisibleBox"
+                          Grid.Column="0"
+                          Header="Password"
+                          IsReadOnly="True"
+                          Visibility="Collapsed">
+                    <TextBox.RightHeader>
+                        <Button Click="RevealButton_Click"
+                                Style="{StaticResource SubtleButtonStyle}">
+                            <Button.Icon>
+                                <FontIcon Glyph="&#xE7B3;"/>
+                            </Button.Icon>
+                        </Button>
+                    </TextBox.RightHeader>
+                </TextBox>
+                
+                <Button Grid.Column="1"
+                        Content="Copy"
+                        Click="CopyPassword_Click"
+                        VerticalAlignment="Bottom"
+                        Margin="8,0,0,0">
+                    <Button.Icon>
+                        <FontIcon Glyph="&#xE8C8;"/>
+                    </Button.Icon>
+                </Button>
+            </Grid>
+            
+            <!-- TOTP Section -->
+            <Grid x:Name="TOTPPanel"
+                  Grid.Row="3"
+                  Margin="0,0,0,12"
+                  Padding="16"
+                  Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                  CornerRadius="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <ProgressRing x:Name="TOTPProgress"
+                              Grid.Column="0"
+                              Width="40"
+                              Height="40"
+                              Value="0"
+                              Maximum="30"
+                              IsIndeterminate="False"
+                              VerticalAlignment="Center"/>
+                
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
+                    <TextBlock Text="TOTP Code"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    <TextBlock x:Name="TOTPCodeBlock"
+                               Style="{StaticResource TitleTextBlockStyle}"
+                               FontWeight="SemiBold"
+                               FontSize="28"
+                               CharacterSpacing="200">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                </StackPanel>
+                
+                <Button Grid.Column="2"
+                        Content="Copy"
+                        Click="CopyTOTP_Click"
+                        VerticalAlignment="Center">
+                    <Button.Icon>
+                        <FontIcon Glyph="&#xE8C8;"/>
+                    </Button.Icon>
+                </Button>
+            </Grid>
+            
+            <!-- Notes -->
+            <TextBox x:Name="NotesBox"
+                     Grid.Row="4"
+                     Header="Notes"
+                     IsReadOnly="True"
+                     TextWrapping="Wrap"
+                     AcceptsReturn="True"
+                     MinHeight="80"
+                     Margin="0,0,0,12"/>
+            
+            <!-- Created / Modified (placeholder) -->
+            <TextBlock x:Name="MetaBlock"
+                       Grid.Row="5"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                       Margin="0,0,0,20">
+                <TextBlock.Transitions>
+                    <TransitionCollection/>
+                </TextBlock.Transitions>
+            </TextBlock>
+            
+            <!-- Action Buttons -->
+            <Grid Grid.Row="6" ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <Button Grid.Column="0"
+                        Content="Edit"
+                        Click="EditEntry_Click">
+                    <Button.Icon>
+                        <FontIcon Glyph="&#xE70F;"/>
+                    </Button.Icon>
+                </Button>
+                
+                <Button Grid.Column="1"
+                        Content="Delete"
+                        Click="DeleteEntry_Click">
+                    <Button.Icon>
+                        <FontIcon Glyph="&#xE74D;"/>
+                    </Button.Icon>
+                </Button>
+                
+                <Button Grid.Column="2"
+                        Content="Back"
+                        Click="BackButton_Click">
+                    <Button.Icon>
+                        <FontIcon Glyph="&#xE72B;"/>
+                    </Button.Icon>
+                </Button>
+            </Grid>
+            
+            <!-- Clipboard clear notification -->
+            <InfoBar x:Name="ClipboardInfoBar"
+                    Grid.Row="7"
+                    Margin="0,12,0,0"
+                    IsOpen="False"
+                    Severity="Informational"
+                    Title="Clipboard"
+                    Message="Password copied. Will be cleared in 30 seconds."
+                    IsClosable="True"/>
+        </Grid>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,20 @@
+[package]
+name = "bitnet-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bitnet-cli"
+path = "src/main.rs"
+
+[dependencies]
+bitnet-totp = { workspace = true }
+zeroize = { workspace = true }
+bitnet-kdbx = { workspace = true }
+bitnet-crypto = { workspace = true }
+bitnet-core = { workspace = true }
+clap = { workspace = true }
+rpassword = { workspace = true }
+

@@ -1,0 +1,11 @@
+﻿[package]
+name = "bitnet-dpapi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+windows = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
