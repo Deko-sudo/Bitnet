@@ -34,6 +34,24 @@ When a PFX file is supplied, the script decrypts the secure-string password to p
 
 **Status**: Accepted for local/interactive signing scripts; CI must use thumbprint-based signing.
 
+## L-006: Max Ciphertext Size Not Enforced in `load_vault`
+
+**Location**: `crates/bitnet-kdbx/src/lib.rs` — `load_vault`
+
+Before Task 3.1 the function read `payload_len` directly from the untrusted vault header and immediately allocated a buffer of that size, allowing a malicious file to trigger an out-of-memory panic.
+
+**Mitigation** (Task 3.1):
+```rust
+    let payload_len = u64::from_be_bytes(data[HEADER_SIZE + 32..HEADER_SIZE + 40].try_into().unwrap()) as usize;
+    const MAX_CIPHERTEXT_LENGTH: usize = 100 * 1024 * 1024;
+    if payload_len > MAX_CIPHERTEXT_LENGTH {
+        return Err(KdbxError::InvalidFormat);
+    }
+```
+A hard ceiling of **100 MiB** is enforced before any allocation occurs.
+
+**Status**: MITIGATED in v0.1 — accepted until a streaming decryption design removes the need for a single in-memory ceiling.
+
 ## M-004: Native Messaging Host `allowed_origins` Wildcard for Development vs. Production Pinning
 
 **Location**: `browser-extension/com.bitnet.nativehost.json`
