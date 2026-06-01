@@ -23,7 +23,15 @@
     return null;
   }
 
+  function isFieldVisible(field) {
+    const style = window.getComputedStyle(field);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = field.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
   function showOverlay(passwordField) {
+    if (!isFieldVisible(passwordField)) return;
     const rect = passwordField.getBoundingClientRect();
     const overlay = document.createElement("div");
     overlay.id = "bitnet-overlay";
@@ -61,8 +69,14 @@
       }
 
       const entries = JSON.parse(response.data || "[]");
-      const hostname = window.location.hostname.toLowerCase();
-      const matches = entries.filter(e => e.url && e.url.toLowerCase().includes(hostname));
+      const pageHostname = window.location.hostname.toLowerCase();
+      function matchHostname(entryUrl, pageHost) {
+        try {
+          const u = new URL(entryUrl);
+          return u.hostname.toLowerCase() === pageHost;
+        } catch (e) { return false; }
+      }
+      const matches = entries.filter(e => e.url && matchHostname(e.url, pageHostname));
 
       if (matches.length === 0) {
         overlay.textContent = "BitNet: no entries for this site";
@@ -77,7 +91,11 @@
           overlay.remove();
         });
       } else {
-        overlay.innerHTML = `<div style="font-weight:bold;margin-bottom:4px;">BitNet entries:</div>`;
+        const header = document.createElement("div");
+        header.style.cssText = "font-weight:bold;margin-bottom:4px;";
+        header.textContent = "BitNet entries:";
+        overlay.appendChild(header);
+
         const list = document.createElement("div");
         matches.forEach(m => {
           const row = document.createElement("div");
@@ -100,20 +118,23 @@
   }
 
   function fillEntry(uuid, passwordField) {
-    browserAPI.runtime.sendMessage({ action: "get_password", uuid: uuid }, (response) => {
+    browserAPI.runtime.sendMessage({ action: "get_entry", uuid: uuid }, (response) => {
       if (browserAPI.runtime.lastError || !response || !response.success) {
         console.error("BitNet fill failed:", browserAPI.runtime.lastError?.message || response?.error);
         return;
       }
-      const password = response.data;
-      passwordField.value = password;
-      passwordField.dispatchEvent(new Event("input", { bubbles: true }));
-      passwordField.dispatchEvent(new Event("change", { bubbles: true }));
-
-      const usernameField = findUsernameField();
-      if (usernameField) {
-        // We don't have username in the current native host response,
-        // but we could extend the protocol. For now, just fill password.
+      var data;
+      try { data = JSON.parse(response.data); } catch (e) { return; }
+      if (data.password) {
+        passwordField.value = data.password;
+        passwordField.dispatchEvent(new Event("input", { bubbles: true }));
+        passwordField.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      var usernameField = findUsernameField();
+      if (usernameField && data.username) {
+        usernameField.value = data.username;
+        usernameField.dispatchEvent(new Event("input", { bubbles: true }));
+        usernameField.dispatchEvent(new Event("change", { bubbles: true }));
       }
     });
   }
@@ -133,4 +154,14 @@
       if (existing) existing.remove();
     }
   }, true);
+
+  // Remove overlay on scroll or resize to prevent it from floating at stale coordinates
+  window.addEventListener("scroll", () => {
+    const existing = document.getElementById("bitnet-overlay");
+    if (existing) existing.remove();
+  });
+  window.addEventListener("resize", () => {
+    const existing = document.getElementById("bitnet-overlay");
+    if (existing) existing.remove();
+  });
 })();
