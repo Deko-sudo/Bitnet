@@ -427,12 +427,12 @@ pub extern "C" fn bitnet_entry_get_details(entry_uuid: *const c_char) -> *mut c_
     match sess.as_ref() {
         Some(manager) => match manager.get_entry_details(&uuid) {
             Ok((password, username)) => {
-                let json = format!(
-                    "{{\"username\":{},\"password\":{}}}",
-                    serde_json::to_string(&username).unwrap_or_default(),
-                    serde_json::to_string(password.as_str()).unwrap_or_default()
-                );
-                to_c_string(&json)
+                let json = serde_json::json!({
+                    "username": username,
+                    "password": password.as_str()
+                });
+                let json_string = serde_json::to_string(&json).unwrap_or_default();
+                to_c_string(&json_string)
             }
             Err(_) => std::ptr::null_mut(),
         },
