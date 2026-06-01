@@ -1,6 +1,8 @@
 ﻿use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -15,10 +17,44 @@ struct Response {
     error: Option<String>,
 }
 
+/// Simple sliding-window rate limiter: max N messages per second.
+struct RateLimiter {
+    window_start: AtomicU64, // epoch millis / 1000 = seconds
+    count: AtomicU64,
+    max_per_sec: u64,
+}
+
+impl RateLimiter {
+    fn new(max_per_sec: u64) -> Self {
+        Self {
+            window_start: AtomicU64::new(0),
+            count: AtomicU64::new(0),
+            max_per_sec,
+        }
+    }
+
+    fn check(&self) -> bool {
+        let now_sec = Instant::now().elapsed().as_secs();
+        let stored = self.window_start.load(Ordering::Relaxed);
+        if now_sec != stored {
+            self.window_start.store(now_sec, Ordering::Relaxed);
+            self.count.store(1, Ordering::Relaxed);
+            return true;
+        }
+        let current = self.count.fetch_add(1, Ordering::Relaxed);
+        current < self.max_per_sec
+    }
+}
+
 fn main() {
     bitnet_ffi::bitnet_init();
+    let rate_limiter = RateLimiter::new(100); // 100 msg/s
 
     loop {
+        if !rate_limiter.check() {
+            let _ = send_response(false, None, Some("Rate limit exceeded".into()));
+            continue;
+        }
         let mut len_buf = [0u8; 4];
         if io::stdin().read_exact(&mut len_buf).is_err() {
             break;

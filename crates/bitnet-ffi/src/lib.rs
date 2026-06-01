@@ -152,6 +152,11 @@ pub extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const
         None => return -1,
     };
     let json_str = unsafe { CStr::from_ptr(entry_json).to_string_lossy() };
+    // Deny unreasonably large JSON payloads (anti-DoS)
+    const MAX_ENTRY_JSON_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
+    if json_str.len() > MAX_ENTRY_JSON_BYTES {
+        return -7; // entry JSON too large
+    }
     let entry: serde_json::Value = match serde_json::from_str(&json_str) {
         Ok(v) => v,
         Err(_) => return -6, // invalid json
@@ -203,6 +208,11 @@ pub extern "C" fn bitnet_update_entry(entry_uuid: *const c_char, entry_json: *co
         None => return -1,
     };
     let json_str = unsafe { CStr::from_ptr(entry_json).to_string_lossy() };
+    // Deny unreasonably large JSON payloads (anti-DoS)
+    const MAX_ENTRY_JSON_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
+    if json_str.len() > MAX_ENTRY_JSON_BYTES {
+        return -7; // entry JSON too large
+    }
     let entry: serde_json::Value = match serde_json::from_str(&json_str) {
         Ok(v) => v,
         Err(_) => return -6,
