@@ -33,5 +33,49 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+      - name: Secret scan
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\pre-commit-secret-scan.ps1 -CI
+        shell: cmd
+
+      - name: cargo deny check
+        run: cargo deny check
+
       - name: cargo build (release)
         run: cargo build --release --workspace
+
+      # -------------------------------------------------------------------
+      # Code Signing (production only – requires GitHub Secret)
+      # -------------------------------------------------------------------
+      - name: Sign binaries
+        if: github.ref == 'refs/heads/main' && env.CODESIGN_THUMBPRINT != ''
+        env:
+          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
+        run: |
+          # Locate signtool in Windows SDK
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1
+          if (-not $signtool) {
+            Write-Host "signtool not found – skipping signing"
+            exit 0
+          }
+          $files = @(
+            "target\release\bitnet_ffi.dll",
+            "target\release\bitnet-native-host.exe"
+          )
+          foreach ($f in $files) {
+            if (Test-Path $f) {
+              & $signtool.FullName sign /sha1 "$env:CODESIGN_THUMBPRINT" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 "$f"
+            }
+          }
+
+      # -------------------------------------------------------------------
+      # Fuzzing
+      # -------------------------------------------------------------------
+      - name: Install Rust nightly for fuzzing
+        run: |
+          rustup toolchain install nightly
+          rustup component add rust-src --toolchain nightly
+          cargo +nightly install cargo-fuzz
+      - name: cargo fuzz (KDBX deserializer – 2 min)
+        run: cargo +nightly fuzz run kdbx_deserialize -- -max_total_time=120
+        # Fuzzing failures fail the build so regressions are caught immediately.
