@@ -1,14 +1,14 @@
-﻿{
-  "name": "bitnet-e2e",
+{
+  "name": "bitnet-e2e-tests",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "test": "playwright test",
+    "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
-    "install:browsers": "playwright install chromium"
+    "install:browser": "playwright install chromium"
   },
   "devDependencies": {
-    "@playwright/test": "^1.45.0",
-    "playwright": "^1.45.0"
+    "@playwright/test": "^1.46.0"
   }
 }
