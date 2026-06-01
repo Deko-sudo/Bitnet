@@ -58,11 +58,23 @@ Out of scope:
 
 ## Bug Bounty
 
-We run periodic **bug bounty programs** through HackerOne. Eligibility:
-- First valid Critical/High finding per category
-- Full reproduction steps + CVSS
-- Coordination before public disclosure
-- No social engineering or physical attacks
+We run a **public bug bounty program** for responsible disclosure. Full details:
+
+- **Program overview:** [`docs/BUG_BOUNTY.md`](docs/BUG_BOUNTY.md)
+- **Researcher hunting guide:** [`docs/BOUNTY_HUNTING_GUIDE.md`](docs/BOUNTY_HUNTING_GUIDE.md)
+- **Internal triage guide:** [`docs/BOUNTY_TRIAGE_GUIDE.md`](docs/BOUNTY_TRIAGE_GUIDE.md)
+- **Contact:** `security@bitnet.dev` (PGP key below)
+- **Scope:** All components in this repository (Rust crates, browser extension, C# desktop, CLI)
+- **Bounty range:** $100 – $5,000 (see program for full matrix)
+- **Hall of Fame:** See below
+
+### Hall of Fame
+
+*(No reports yet — program launched 2026-06-01)*
+
+### Disclosure Timeline
+- Default: 90 days from report
+- Critical: 14-day patch deployment SLA
 
 ## PGP Key
 
