@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BitNet E2E — Login Form</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; max-width: 400px; margin: 0 auto; }
+    label { display: block; margin-top: 12px; font-weight: bold; }
+    input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+    button { margin-top: 16px; padding: 10px 20px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Test Login</h1>
+  <form id="login" action="#" method="post">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username">
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+
+    <label for="totp">TOTP Code</label>
+    <input id="totp" name="totp" type="text" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*">
+
+    <button type="submit">Sign In</button>
+  </form>
+</body>
+</html>

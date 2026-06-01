@@ -1,27 +1,38 @@
-﻿import { defineConfig, devices } from '@playwright/test';
+﻿import { defineConfig } from '@playwright/test';
+import path from 'path';
+
+/**
+ * Playwright configuration for BitNet browser-extension E2E tests.
+ *
+ * Prerequisites:
+ *   npm install -g @playwright/test
+ *   npx playwright install chromium
+ *
+ * Running:
+ *   npx playwright test
+ */
+
+const extensionPath = path.resolve(__dirname, '..', '..', 'browser-extension');
 
 export default defineConfig({
   testDir: '.',
   fullyParallel: false,
-  forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
   workers: 1,
-  reporter: 'list',
-  use: {
-    trace: 'on-first-retry',
-    headless: false,
-  },
+  reporter: [['line'], ['html', { open: 'never' }]],
   projects: [
     {
-      name: 'chromium',
+      name: 'chromium-extension',
       use: {
-        ...devices['Desktop Chrome'],
-        // Launch Chrome with the BitNet extension loaded
+        browserName: 'chromium',
+        viewport: { width: 1280, height: 720 },
         launchOptions: {
           args: [
-            `--disable-extensions-except=${__dirname}/../../browser-extension`,
-            `--load-extension=${__dirname}/../../browser-extension`,
+            `--disable-extensions-except=${extensionPath}`,
+            `--load-extension=${extensionPath}`,
+            '--no-first-run',
+            '--no-default-browser-check',
           ],
+          headless: false,
         },
       },
     },

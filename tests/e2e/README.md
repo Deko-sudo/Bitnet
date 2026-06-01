@@ -1,34 +1,42 @@
-﻿# BitNet E2E Tests (Playwright)
+﻿# BitNet Browser Extension — E2E Tests
 
 ## Prerequisites
 
-```bash
-cd tests/e2e
-npm install
-npx playwright install chromium
-```
+- Node.js >= 18
+- Playwright >= 1.60 (`npx playwright install chromium`)
+- Extension loaded from `D:\BitNet\bitnet\browser-extension\`
 
 ## Running Tests
 
 ```bash
-# Run all tests
-npm test
-
-# Run with UI mode
-npm run test:ui
-
-# Run specific test
-npx playwright test extension.spec.ts --project=chromium
+cd tests/e2e
+npx playwright test
 ```
 
 ## Test Coverage
 
-- **Popup**: Loads correctly, displays vault status
-- **Content Script**: Overlay appears on password field focus, hides on blur
-- **Native Messaging**: Verifies `is_unlocked` protocol with `bitnet-native-host.exe`
+| Test | Description | Native Host Required |
+|------|-------------|---------------------|
+| `popup shows locked state` | Lock icon appears when no native host | No |
+| `popup shows unlocked state` | Green indicator + entry list via mock | No |
+| `content script detects login form` | Username/password/TOTP fields visible | No |
+| `autofill overlay appears` | Overlay injects and fills form fields | No (mock) |
 
-## Notes
+## Architecture
 
-- Tests assume `bitnet-native-host.exe` is built in `target/release/`
-- Extension must be loaded unpacked for popup/content tests
-- Native host tests require the host binary to exist (skipped otherwise)
+All tests use **Playwright** with a **real Chromium browser** loading the unpacked
+extension (`browser-extension/`).  Native-host replies are **mocked at the
+background-page level** so tests run in CI without `bitnet-native-host.exe`.
+
+To run with a real native host:
+
+1. Build the workspace: `cargo build --release`
+2. Install the host: `scripts\install-host.ps1 -ExtensionId YOUR_ID`
+3. Remove the mock evaluation in `extension.spec.ts`
+
+## Known Limitations
+
+- URL matching in `content.js` uses `window.location.hostname`.  The test server
+  runs on `127.0.0.1`; mock entries return `url: "http://127.0.0.1"`.
+- Overlay visibility depends on field detection (`isFieldVisible`) which checks
+  pixel size.  Headless mode may behave differently — tests force headed mode.
