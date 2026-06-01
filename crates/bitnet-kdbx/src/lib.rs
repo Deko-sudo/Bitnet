@@ -337,6 +337,10 @@ pub fn load_vault(path: &str, master_password: &[u8]) -> Result<Vec<Group>, Kdbx
     }
 
     let payload_len = u64::from_be_bytes(data[HEADER_SIZE + 32..HEADER_SIZE + 40].try_into().unwrap()) as usize;
+    const MAX_CIPHERTEXT_LENGTH: usize = 100 * 1024 * 1024;
+    if payload_len > MAX_CIPHERTEXT_LENGTH {
+        return Err(KdbxError::InvalidFormat);
+    }
     if data.len() < HEADER_SIZE + 40 + payload_len {
         return Err(KdbxError::InvalidFormat);
     }
@@ -588,6 +592,36 @@ mod security_tests {
             result
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_ciphertext_too_large_rejected() {
+        let header = VaultHeader {
+            magic: *b"BITNET01",
+            version: VERSION,
+            salt: [0u8; 32],
+            nonce: [0u8; 12],
+            argon2_time: 3,
+            argon2_memory: 64 * 1024,
+            argon2_parallelism: 4,
+        };
+        let header_bytes = header.to_bytes();
+        let hmac_key = derive_key(b"master_password", &[0x01; 32]);
+        let header_hmac = hmac_sha256(&*hmac_key, &header_bytes);
+
+        let mut file = fs::File::create("test_payload_len.bitnet").unwrap();
+        file.write_all(&header_bytes).unwrap();
+        file.write_all(&header_hmac).unwrap();
+        file.write_all(&u64::MAX.to_be_bytes()).unwrap();
+        drop(file);
+
+        let result = load_vault("test_payload_len.bitnet", b"master_password");
+        assert!(
+            matches!(result, Err(KdbxError::InvalidFormat)),
+            "expected InvalidFormat for oversized payload_len, got {:?}",
+            result
+        );
+        fs::remove_file("test_payload_len.bitnet").unwrap();
     }
 
     #[test]
