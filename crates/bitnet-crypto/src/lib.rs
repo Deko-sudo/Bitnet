@@ -14,9 +14,28 @@ pub use zeroize::Zeroizing;
 pub type Aes256GcmKey = [u8; 32];
 pub type Aes256GcmNonce = [u8; 12];
 
+/// Enforce minimum Argon2 parameters per security policy.
+pub fn validate_argon2_params(params: &argon2::Params) -> Result<(), &'static str> {
+    if params.m_cost() < 64 * 1024 {
+        return Err("Argon2 memory below policy minimum");
+    }
+    if params.t_cost() < 3 {
+        return Err("Argon2 time below policy minimum");
+    }
+    if params.p_cost() < 4 {
+        return Err("Argon2 parallelism below policy minimum");
+    }
+    Ok(())
+}
+
 /// Derive a 32-byte key from master password using Argon2id (t=3, m=64MB, p=4).
 pub fn derive_key(master_password: &[u8], salt: &[u8]) -> Zeroizing<Aes256GcmKey> {
-    let params = argon2::Params::new(64 * 1024, 3, 4, Some(32)).expect("Argon2 params");
+    let params =
+        argon2::Params::new(64 * 1024, 3, 4, Some(32)).expect("Argon2 params");
+    assert!(
+        validate_argon2_params(&params).is_ok(),
+        "Weak Argon2 parameters detected"
+    );
     let argon2 = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut output = Zeroizing::new([0u8; 32]);
     argon2
@@ -355,5 +374,17 @@ mod extra_tests {
         assert!(has_lower, "Should generate lowercase");
         assert!(has_digit, "Should generate digits");
         assert!(has_symbol, "Should generate symbols");
+    }
+
+    #[test]
+    fn test_validate_argon2_params_rejects_weak() {
+        let weak = argon2::Params::new(32 * 1024, 1, 1, Some(32)).unwrap();
+        assert!(validate_argon2_params(&weak).is_err());
+    }
+
+    #[test]
+    fn test_validate_argon2_params_accepts_strong() {
+        let strong = argon2::Params::new(64 * 1024, 3, 4, Some(32)).unwrap();
+        assert!(validate_argon2_params(&strong).is_ok());
     }
 }

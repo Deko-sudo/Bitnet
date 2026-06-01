@@ -155,11 +155,11 @@ pub extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const
         bytes
     });
 
-    let title = entry.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let username = entry.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let title = Zeroizing::new(entry.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string());
+    let username = Zeroizing::new(entry.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string());
     let password = Zeroizing::new(entry.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string());
-    let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let notes = entry.get("notes").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let url = Zeroizing::new(entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string());
+    let notes = Zeroizing::new(entry.get("notes").and_then(|v| v.as_str()).unwrap_or("").to_string());
     let totp_secret = entry.get("totp_secret").and_then(|v| v.as_str()).map(|s| Zeroizing::new(s.to_string()));
 
     let new_entry = Entry {
@@ -366,6 +366,80 @@ pub extern "C" fn bitnet_entry_get_totp(entry_uuid: *const c_char) -> *mut c_cha
     }
 }
 
+/// Get TOTP code into caller-provided buffer (bounded, safer for C# interop).
+#[no_mangle]
+pub extern "C" fn bitnet_entry_get_totp_to_buffer(
+    entry_uuid: *const c_char,
+    out_buf: *mut c_char,
+    out_len: usize,
+) -> c_int {
+    if entry_uuid.is_null() || out_buf.is_null() || out_len == 0 {
+        return -1;
+    }
+    let uuid_str = unsafe { CStr::from_ptr(entry_uuid).to_string_lossy() };
+    let uuid = match uuid_from_hex(&uuid_str) {
+        Some(u) => u,
+        None => return -1,
+    };
+    let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    match sess.as_ref() {
+        Some(manager) => match manager.get_totp(&uuid) {
+            Ok(Some((code, remaining))) => {
+                let payload = format!("{}, {}", code, remaining);
+                let bytes = payload.as_bytes();
+                if bytes.len() >= out_len {
+                    return -5; // buf too small
+                }
+                let copy_len = std::cmp::min(bytes.len(), out_len - 1);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        bytes.as_ptr() as *const c_char,
+                        out_buf,
+                        copy_len,
+                    );
+                    *out_buf.add(copy_len) = 0;
+                }
+                0
+            }
+            Ok(None) => {
+                unsafe { *out_buf = 0; }
+                0
+            }
+            Err(_) => -1,
+        },
+        None => -1,
+    }
+}
+
+/// Get detailed entry info (username and password) as JSON.
+/// Returns newly allocated C string '{"username":"...","password":"..."}'. Caller must free with `bitnet_free_string`.
+#[no_mangle]
+pub extern "C" fn bitnet_entry_get_details(entry_uuid: *const c_char) -> *mut c_char {
+    if entry_uuid.is_null() {
+        return std::ptr::null_mut();
+    }
+    let uuid_str = unsafe { CStr::from_ptr(entry_uuid).to_string_lossy() };
+    let uuid = match uuid_from_hex(&uuid_str) {
+        Some(u) => u,
+        None => return std::ptr::null_mut(),
+    };
+    let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    match sess.as_ref() {
+        Some(manager) => match manager.get_entry_details(&uuid) {
+            Ok((password, username)) => {
+                let json = format!(
+                    "{{\"username\":{},\"password\":{}}}",
+                    serde_json::to_string(&username).unwrap_or_default(),
+                    serde_json::to_string(password.as_str()).unwrap_or_default()
+                );
+                to_c_string(&json)
+            }
+            Err(_) => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// List all entries in unlocked vault as JSON array.
 /// Returns newly allocated C string. Caller must free with `bitnet_free_string`.
 #[no_mangle]
@@ -485,5 +559,39 @@ mod tests {
         let len: c_int = -1;
         let as_usize = len as usize;
         assert!(as_usize > 512);
+    }
+
+    #[test]
+    fn test_entry_get_totp_to_buffer() {
+        bitnet_init();
+        let path = "test_totp_buf.bitnet\0";
+        let pwd = "pass\0";
+        let path_c = path.as_ptr() as *const c_char;
+        let pwd_c = pwd.as_ptr() as *const c_char;
+        assert_eq!(bitnet_vault_create(path_c, pwd_c), 0);
+
+        let root_group = bitnet_create_group(std::ptr::null(), "Root\0".as_ptr() as *const c_char);
+        assert!(!root_group.is_null());
+        let root_uuid = unsafe { CStr::from_ptr(root_group).to_string_lossy().to_string() };
+        let entry_json = format!(
+            "{{\"uuid\":\"550e8400e29b41d4a716446655440000\",\"title\":\"Test\",\"username\":\"u\",\"password\":\"p\",\"url\":\"\",\"notes\":\"\",\"totp_secret\":\"JBSWY3DPEHPK3PXP\"}}"
+        );
+        let entry_json_c = CString::new(entry_json).unwrap();
+        let root_uuid_c = CString::new(root_uuid.as_str()).unwrap();
+        assert_eq!(bitnet_add_entry(root_uuid_c.as_ptr(), entry_json_c.as_ptr()), 0);
+        bitnet_free_string(root_group);
+
+        let entry_uuid = "550e8400e29b41d4a716446655440000\0";
+        let mut buf = [0 as c_char; 32];
+        let result = bitnet_entry_get_totp_to_buffer(
+            entry_uuid.as_ptr() as *const c_char,
+            buf.as_mut_ptr(),
+            buf.len(),
+        );
+        assert_eq!(result, 0);
+        assert!(buf.iter().any(|c| *c != 0));
+
+        bitnet_vault_lock();
+        std::fs::remove_file("test_totp_buf.bitnet").ok();
     }
 }
