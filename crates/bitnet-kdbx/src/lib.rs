@@ -11,7 +11,7 @@ const VERSION: u32 = 0x0001_0000;
 #[derive(Debug, Clone)]
 pub struct Group {
     pub uuid: [u8; 16],
-    pub name: String,
+    pub name: Zeroizing<String>,
     pub children: Vec<Group>,
     pub entries: Vec<Entry>,
 }
@@ -20,11 +20,11 @@ pub struct Group {
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub uuid: [u8; 16],
-    pub title: String,
-    pub username: String,
+    pub title: Zeroizing<String>,
+    pub username: Zeroizing<String>,
     pub password: Zeroizing<String>,
-    pub url: String,
-    pub notes: String,
+    pub url: Zeroizing<String>,
+    pub notes: Zeroizing<String>,
     pub totp_secret: Option<Zeroizing<String>>,
 }
 
@@ -139,9 +139,15 @@ fn serialize_string(buf: &mut Vec<u8>, s: &str) {
     buf.extend_from_slice(bytes);
 }
 
+const MAX_DESERIALIZE_DEPTH: usize = 256;
+const MAX_TOTAL_GROUPS: usize = 50_000;
+const MAX_TOTAL_ENTRIES: usize = 100_000;
+
 fn deserialize_entries(data: &[u8]) -> Result<Vec<Group>, KdbxError> {
     let mut groups = Vec::new();
     let mut offset = 0usize;
+    let mut total_groups = 0usize;
+    let mut total_entries = 0usize;
     while offset < data.len() {
         if offset + 1 > data.len() {
             return Err(KdbxError::InvalidFormat);
@@ -151,13 +157,20 @@ fn deserialize_entries(data: &[u8]) -> Result<Vec<Group>, KdbxError> {
         if marker != 0x01 {
             return Err(KdbxError::InvalidFormat);
         }
-        let group = deserialize_group(data, &mut offset)?;
+        let group = deserialize_group(data, &mut offset, 1, &mut total_groups, &mut total_entries)?;
         groups.push(group);
     }
     Ok(groups)
 }
 
-fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError> {
+fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups: &mut usize, total_entries: &mut usize) -> Result<Group, KdbxError> {
+    if depth > MAX_DESERIALIZE_DEPTH {
+        return Err(KdbxError::InvalidFormat);
+    }
+    *total_groups = total_groups.checked_add(1).ok_or(KdbxError::InvalidFormat)?;
+    if *total_groups > MAX_TOTAL_GROUPS {
+        return Err(KdbxError::InvalidFormat);
+    }
     if *offset + 16 > data.len() {
         return Err(KdbxError::InvalidFormat);
     }
@@ -165,7 +178,7 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
     uuid.copy_from_slice(&data[*offset..*offset + 16]);
     *offset += 16;
 
-    let name = deserialize_string(data, offset)?;
+    let name = deserialize_string_zeroizing(data, offset)?;
 
     if *offset + 4 > data.len() {
         return Err(KdbxError::InvalidFormat);
@@ -185,7 +198,7 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
         if marker != 0x01 {
             return Err(KdbxError::InvalidFormat);
         }
-        children.push(deserialize_group(data, offset)?);
+        children.push(deserialize_group(data, offset, depth + 1, total_groups, total_entries)?);
     }
 
     if *offset + 4 > data.len() {
@@ -214,11 +227,16 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
         entry_uuid.copy_from_slice(&data[*offset..*offset + 16]);
         *offset += 16;
 
-        let title = deserialize_string(data, offset)?;
-        let username = deserialize_string(data, offset)?;
-        let password = Zeroizing::new(deserialize_string(data, offset)?);
-        let url = deserialize_string(data, offset)?;
-        let notes = deserialize_string(data, offset)?;
+        let title = deserialize_string_zeroizing(data, offset)?;
+        let username = deserialize_string_zeroizing(data, offset)?;
+        let password = deserialize_string_zeroizing(data, offset)?;
+        let url = deserialize_string_zeroizing(data, offset)?;
+        let notes = deserialize_string_zeroizing(data, offset)?;
+
+        *total_entries = total_entries.checked_add(1).ok_or(KdbxError::InvalidFormat)?;
+        if *total_entries > MAX_TOTAL_ENTRIES {
+            return Err(KdbxError::InvalidFormat);
+        }
 
         if *offset + 1 > data.len() {
             return Err(KdbxError::InvalidFormat);
@@ -227,7 +245,7 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
         *offset += 1;
 
         let totp_secret = if has_totp {
-            Some(Zeroizing::new(deserialize_string(data, offset)?))
+            Some(deserialize_string_zeroizing(data, offset)?)
         } else {
             None
         };
@@ -251,7 +269,7 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
     })
 }
 
-fn deserialize_string(data: &[u8], offset: &mut usize) -> Result<String, KdbxError> {
+fn deserialize_string_zeroizing(data: &[u8], offset: &mut usize) -> Result<Zeroizing<String>, KdbxError> {
     if *offset + 4 > data.len() {
         return Err(KdbxError::InvalidFormat);
     }
@@ -259,13 +277,14 @@ fn deserialize_string(data: &[u8], offset: &mut usize) -> Result<String, KdbxErr
         data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
     ]) as usize;
     *offset += 4;
-    if *offset + len > data.len() {
+    let end = offset.checked_add(len).ok_or(KdbxError::InvalidFormat)?;
+    if end > data.len() {
         return Err(KdbxError::InvalidFormat);
     }
-    let s = String::from_utf8(data[*offset..*offset + len].to_vec())
+    let s = String::from_utf8(data[*offset..end].to_vec())
         .map_err(|_| KdbxError::InvalidFormat)?;
-    *offset += len;
-    Ok(s)
+    *offset = end;
+    Ok(Zeroizing::new(s))
 }
 
 /// Save groups to an encrypted vault file.
@@ -338,16 +357,16 @@ mod tests {
     fn test_roundtrip() {
         let entry = Entry {
             uuid: [1u8; 16],
-            title: "GitHub".into(),
-            username: "alice".into(),
-            password: Zeroizing::new("secret123".into()),
-            url: "https://github.com".into(),
-            notes: "".into(),
+            title: Zeroizing::new("GitHub".to_string()),
+            username: Zeroizing::new("alice".to_string()),
+            password: Zeroizing::new("secret123".to_string()),
+            url: Zeroizing::new("https://github.com".to_string()),
+            notes: Zeroizing::new("".to_string()),
             totp_secret: Some(Zeroizing::new("JBSWY3DPEHPK3PXP".into())),
         };
         let group = Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![entry],
         };
@@ -355,8 +374,8 @@ mod tests {
         save_vault(path, &[group], b"master_password").unwrap();
         let loaded = load_vault(path, b"master_password").unwrap();
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].entries[0].title, "GitHub");
-        assert_eq!(loaded[0].entries[0].username, "alice");
+        assert_eq!(loaded[0].entries[0].title.as_str(), "GitHub");
+        assert_eq!(loaded[0].entries[0].username.as_str(), "alice");
         assert_eq!(loaded[0].entries[0].password.as_str(), "secret123");
         fs::remove_file(path).unwrap();
     }
@@ -371,26 +390,26 @@ mod extra_tests {
         let entries = vec![
             Entry {
                 uuid: [1u8; 16],
-                title: "GitHub".into(),
-                username: "alice".into(),
-                password: Zeroizing::new("pass1".into()),
-                url: "https://github.com".into(),
-                notes: "".into(),
+                title: Zeroizing::new("GitHub".to_string()),
+                username: Zeroizing::new("alice".to_string()),
+                password: Zeroizing::new("pass1".to_string()),
+                url: Zeroizing::new("https://github.com".to_string()),
+                notes: Zeroizing::new("".to_string()),
                 totp_secret: None,
             },
             Entry {
                 uuid: [2u8; 16],
-                title: "Gmail".into(),
-                username: "bob".into(),
-                password: Zeroizing::new("pass2".into()),
-                url: "https://gmail.com".into(),
-                notes: "important".into(),
+                title: Zeroizing::new("Gmail".to_string()),
+                username: Zeroizing::new("bob".to_string()),
+                password: Zeroizing::new("pass2".to_string()),
+                url: Zeroizing::new("https://gmail.com".to_string()),
+                notes: Zeroizing::new("important".to_string()),
                 totp_secret: Some(Zeroizing::new("SECRET123".into())),
             },
         ];
         let group = Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: Zeroizing::new("Root".to_string()),
             children: vec![],
             entries,
         };
@@ -398,8 +417,8 @@ mod extra_tests {
         save_vault(path, &[group], b"master").unwrap();
         let loaded = load_vault(path, b"master").unwrap();
         assert_eq!(loaded[0].entries.len(), 2);
-        assert_eq!(loaded[0].entries[0].title, "GitHub");
-        assert_eq!(loaded[0].entries[1].title, "Gmail");
+        assert_eq!(loaded[0].entries[0].title.as_str(), "GitHub");
+        assert_eq!(loaded[0].entries[1].title.as_str(), "Gmail");
         assert_eq!(loaded[0].entries[1].password.as_str(), "pass2");
         std::fs::remove_file(path).unwrap();
     }
@@ -408,21 +427,21 @@ mod extra_tests {
     fn test_nested_groups() {
         let child = Group {
             uuid: [2u8; 16],
-            name: "Work".into(),
+            name: Zeroizing::new("Work".to_string()),
             children: vec![],
             entries: vec![Entry {
                 uuid: [3u8; 16],
-                title: "Work VPN".into(),
-                username: "employee".into(),
-                password: Zeroizing::new("vpn123".into()),
-                url: "".into(),
-                notes: "".into(),
+                title: Zeroizing::new("Work VPN".to_string()),
+                username: Zeroizing::new("employee".to_string()),
+                password: Zeroizing::new("vpn123".to_string()),
+                url: Zeroizing::new("".to_string()),
+                notes: Zeroizing::new("".to_string()),
                 totp_secret: None,
             }],
         };
         let root = Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: Zeroizing::new("Root".to_string()),
             children: vec![child],
             entries: vec![],
         };
@@ -430,8 +449,8 @@ mod extra_tests {
         save_vault(path, &[root], b"master").unwrap();
         let loaded = load_vault(path, b"master").unwrap();
         assert_eq!(loaded[0].children.len(), 1);
-        assert_eq!(loaded[0].children[0].name, "Work");
-        assert_eq!(loaded[0].children[0].entries[0].title, "Work VPN");
+        assert_eq!(loaded[0].children[0].name.as_str(), "Work");
+        assert_eq!(loaded[0].children[0].entries[0].title.as_str(), "Work VPN");
         std::fs::remove_file(path).unwrap();
     }
 
@@ -439,16 +458,16 @@ mod extra_tests {
     fn test_wrong_password_fails() {
         let entry = Entry {
             uuid: [1u8; 16],
-            title: "Test".into(),
-            username: "u".into(),
-            password: Zeroizing::new("p".into()),
-            url: "".into(),
-            notes: "".into(),
+            title: Zeroizing::new("Test".to_string()),
+            username: Zeroizing::new("u".to_string()),
+            password: Zeroizing::new("p".to_string()),
+            url: Zeroizing::new("".to_string()),
+            notes: Zeroizing::new("".to_string()),
             totp_secret: None,
         };
         let group = Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![entry],
         };
@@ -463,16 +482,16 @@ mod extra_tests {
     fn test_tampered_file_fails() {
         let entry = Entry {
             uuid: [1u8; 16],
-            title: "Test".into(),
-            username: "u".into(),
-            password: Zeroizing::new("p".into()),
-            url: "".into(),
-            notes: "".into(),
+            title: Zeroizing::new("Test".to_string()),
+            username: Zeroizing::new("u".to_string()),
+            password: Zeroizing::new("p".to_string()),
+            url: Zeroizing::new("".to_string()),
+            notes: Zeroizing::new("".to_string()),
             totp_secret: None,
         };
         let group = Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![entry],
         };
@@ -517,6 +536,83 @@ mod security_tests {
         buf.extend_from_slice(&[0u8, 0u8, 0u8, 4u8]);
         let result = deserialize_entries(&buf);
         assert!(matches!(result, Err(KdbxError::InvalidFormat)));
+    }
+
+    #[test]
+    fn test_deserialize_depth_exceeded() {
+        // Build a chain of 257 nested groups (depth 1..257).
+        // deserialize_group rejects depth > 256.
+        let mut group = Group {
+            uuid: [0u8; 16],
+            name: Zeroizing::new("leaf".to_string()),
+            children: vec![],
+            entries: vec![],
+        };
+        for _ in 0..256 {
+            group = Group {
+                uuid: [0u8; 16],
+                name: Zeroizing::new("inner".to_string()),
+                children: vec![group],
+                entries: vec![],
+            };
+        }
+        let path = "test_depth.bitnet";
+        save_vault(path, &[group], b"master").unwrap();
+        let result = load_vault(path, b"master");
+        assert!(
+            matches!(result, Err(KdbxError::InvalidFormat)),
+            "expected InvalidFormat for excessive nesting depth, got {:?}",
+            result
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_deserialize_total_groups_exceeded() {
+        // Create 50_001 top-level groups to exceed MAX_TOTAL_GROUPS (50_000).
+        let mut groups = Vec::with_capacity(50_001);
+        for _ in 0..50_001 {
+            groups.push(Group {
+                uuid: [0u8; 16],
+                name: Zeroizing::new("g".to_string()),
+                children: vec![],
+                entries: vec![],
+            });
+        }
+        let path = "test_total_groups.bitnet";
+        save_vault(path, &groups, b"master").unwrap();
+        let result = load_vault(path, b"master");
+        assert!(
+            matches!(result, Err(KdbxError::InvalidFormat)),
+            "expected InvalidFormat for excessive total groups, got {:?}",
+            result
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_future_version_rejected() {
+        let group = Group {
+            uuid: [0u8; 16],
+            name: Zeroizing::new("Root".to_string()),
+            children: vec![],
+            entries: vec![],
+        };
+        let path = "test_future_ver.bitnet";
+        save_vault(path, &[group], b"master").unwrap();
+
+        let mut data = fs::read(path).unwrap();
+        // Version field is bytes 8..12 in the header
+        data[8..12].copy_from_slice(&0x0002_0000u32.to_be_bytes());
+        fs::write(path, &data).unwrap();
+
+        let result = load_vault(path, b"master");
+        assert!(
+            matches!(result, Err(KdbxError::InvalidFormat)),
+            "expected InvalidFormat for future version, got {:?}",
+            result
+        );
+        fs::remove_file(path).unwrap();
     }
 }
 include!("../fuzz/fuzz_deserialize.rs");
