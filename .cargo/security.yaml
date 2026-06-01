@@ -1,0 +1,83 @@
+# BitNet Security Enforcement Policy
+# Enforced by CI pipeline and pre-commit hooks
+
+policy:
+  version: "1.0"
+  effective_date: "2026-06-01"
+  enforcement_level: strict  # fail on any finding
+
+# --- Cryptography ---
+crypto:
+  minimum_argon2_memory_kb: 65536
+  minimum_argon2_time: 3
+  minimum_argon2_parallelism: 4
+  cipher: AES-256-GCM
+  kdf: Argon2id
+  allowed_algorithms:
+    - SHA-256
+    - SHA-1
+    - HMAC-SHA-256
+    - Argon2id
+  # Banned patterns (descriptions inline, no trailing unquoted hash)
+  banned_patterns:
+    - "rng.gen_range"
+    - "argon2::Argon2::default()"
+    - "aes_gcm::Aes256Gcm::new"
+
+# --- Memory Safety ---
+safety:
+  zeroize_mandatory: true
+  raw_pointer_verification: required
+  ffi_null_checks: required
+  max_deserialize_depth: 256
+  max_total_groups: 50000
+  max_total_entries: 100000
+  dos_max_msg_bytes: 1048576
+
+# --- Input Validation ---
+input:
+  allowed_vault_extension: ".bitnet"
+  path_traversal_protection: required
+  uuid_format: hex_32_chars
+  password_max_length: 512
+  max_ciphertext_length: 104857600
+  json_max_depth: 10
+
+# --- Build Hardening ---
+build:
+  rustflags_required:
+    - "-C link-arg=/guard:cf"
+    - "-C link-arg=/DYNAMICBASE"
+    - "-C link-arg=/CETCOMPAT"
+  required_checks:
+    - cargo_fmt
+    - cargo_clippy_zero_warnings
+    - cargo_test_passing
+    - cargo_audit_clean
+    - cargo_fuzz_kdbx_120s
+  msrv: "1.78"
+  edition: "2021"
+
+# --- Secret Management ---
+secrets:
+  no_hardcoded_secrets: true
+  secrets_scan_patterns:
+    - "password\\s*=\\s*['\"][^'\"]{4,}['\"]"
+    - "api_key\\s*=\\s*['\"]"
+    - "secret\\s*=\\s*['\"]"
+  allowed_test_passwords:
+    - "master"
+    - "master_password"
+    - "password"
+    - "cli_test_password"
+  key_storage_preference: WindowsHello-TPM
+
+# --- CI / Bug Bounty Gates ---
+ci:
+  auto_fail_on_audit_critical: true
+  auto_fail_on_audit_high: true
+  auto_fail_on_clippy_error: true
+  auto_fail_on_clippy_warning: true
+  fuzz_max_total_time_seconds: 120
+  code_signing_required: false
+  allowed_origins_wildcard_ok: true

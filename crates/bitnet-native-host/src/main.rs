@@ -49,6 +49,31 @@ fn main() {
                 let unlocked = bitnet_ffi::bitnet_vault_is_unlocked() != 0;
                 let _ = send_response(unlocked, None, None);
             }
+            "get_entry" => {
+                if let Some(uuid) = request.uuid {
+                    let c_uuid = match CString::new(uuid) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            let _ = send_response(false, None, Some("Invalid UUID".into()));
+                            continue;
+                        }
+                    };
+                    let ptr = bitnet_ffi::bitnet_entry_get_details(c_uuid.as_ptr());
+                    if ptr.is_null() {
+                        let _ = send_response(false, None, Some("Failed to get entry details".into()));
+                    } else {
+                        let json = unsafe {
+                            std::ffi::CStr::from_ptr(ptr)
+                                .to_string_lossy()
+                                .to_string()
+                        };
+                        bitnet_ffi::bitnet_free_string(ptr);
+                        let _ = send_response(true, Some(json), None);
+                    }
+                } else {
+                    let _ = send_response(false, None, Some("Missing UUID".into()));
+                }
+            }
             "get_password" => {
                 if let Some(uuid) = request.uuid {
                     let c_uuid = match CString::new(uuid) {

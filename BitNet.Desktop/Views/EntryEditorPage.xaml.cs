@@ -80,36 +80,38 @@ namespace BitNet.Desktop.Views
             }
 
             var jsonBuilder = new StringBuilder();
-            using (var writer = new Utf8JsonWriter(new System.Buffers.ArrayBufferWriter<byte>()))
+            using (var stream = new System.IO.MemoryStream())
             {
-                writer.WriteStartObject();
-                if (_editingEntry != null)
-                    writer.WriteString("uuid", _editingEntry.UUID);
-                else
-                    writer.WriteString("uuid", "00000000000000000000000000000000");
-                writer.WriteString("title", title);
-                writer.WriteString("username", username);
-                writer.WriteString("password", password);
-                writer.WriteString("url", url);
-                writer.WriteString("notes", notes);
-                if (!string.IsNullOrEmpty(totp))
-                    writer.WriteString("totp_secret", totp);
-                writer.WriteEndObject();
-                writer.Flush();
-                var output = writer.GetWrittenMemory();
-                jsonBuilder.Append(Encoding.UTF8.GetString(output.Span));
+                using (var writer = new Utf8JsonWriter(stream))
+                {
+                    writer.WriteStartObject();
+                    if (_editingEntry != null)
+                        writer.WriteString("uuid", _editingEntry.UUID);
+                    else
+                        writer.WriteString("uuid", "00000000000000000000000000000000");
+                    writer.WriteString("title", title);
+                    writer.WriteString("username", username);
+                    writer.WriteString("password", password);
+                    writer.WriteString("url", url);
+                    writer.WriteString("notes", notes);
+                    if (!string.IsNullOrEmpty(totp))
+                        writer.WriteString("totp_secret", totp);
+                    writer.WriteEndObject();
+                    writer.Flush();
+                }
+                jsonBuilder.Append(Encoding.UTF8.GetString(stream.ToArray()));
             }
 
             var json = jsonBuilder.ToString();
             int result;
             if (_editingEntry != null)
             {
-                result = BitnetCore.bitnet_update_entry(_editingEntry.UUID, json);
+                result = BitnetCore.SecureUpdateEntry(_editingEntry.UUID, json);
             }
             else
             {
                 // Use root group fallback (all-zero UUID triggers first group in Rust core)
-                result = BitnetCore.bitnet_add_entry("00000000000000000000000000000000", json);
+                result = BitnetCore.SecureAddEntry("00000000000000000000000000000000", json);
             }
 
             if (result != 0)

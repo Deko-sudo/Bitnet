@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using BitNet.Desktop.Native;
+using BitNet.Desktop.Helpers;
 using System;
 using Windows.Storage;
 using Windows.Storage.Pickers;
@@ -14,9 +15,22 @@ namespace BitNet.Desktop.Views
         {
             this.InitializeComponent();
             BitnetCore.bitnet_init();
+            _ = InitializeHelloAsync();
         }
 
-        private void UnlockButton_Click(object sender, RoutedEventArgs e)
+        private async System.Threading.Tasks.Task InitializeHelloAsync()
+        {
+            try
+            {
+                if (await WindowsHelloHelper.IsAvailableAsync())
+                {
+                    HelloButton.Visibility = Visibility.Visible;
+                }
+            }
+            catch { /* ignore */ }
+        }
+
+        private async void UnlockButton_Click(object sender, RoutedEventArgs e)
         {
             var path = VaultPathBox.Text;
             var password = MasterPasswordBox.Password;
@@ -30,11 +44,34 @@ namespace BitNet.Desktop.Views
                 ShowError("Please enter your master password.");
                 return;
             }
-            var result = BitnetCore.bitnet_vault_unlock(path, password);
+            var result = BitnetCore.SecureVaultUnlock(path, password);
             if (result == 0)
             {
                 ErrorText.Visibility = Visibility.Collapsed;
                 App.VaultPath = path;
+
+                // Offer to save with Windows Hello if available and not already saved
+                if (await WindowsHelloHelper.IsAvailableAsync()
+                    && !WindowsHelloHelper.HasCredential(path))
+                {
+                    var dialog = new ContentDialog
+                    {
+                        Title = "Windows Hello",
+                        Content = "Would you like to enable Windows Hello for faster unlock?",
+                        PrimaryButtonText = "Enable",
+                        CloseButtonText = "Not now",
+                        XamlRoot = this.XamlRoot
+                    };
+                    var dResult = await dialog.ShowAsync();
+                    if (dResult == ContentDialogResult.Primary)
+                    {
+                        if (await WindowsHelloHelper.VerifyAsync("Verify to save your master password"))
+                        {
+                            WindowsHelloHelper.SaveCredential(path, password);
+                        }
+                    }
+                }
+
                 Frame.Navigate(typeof(VaultPage));
             }
             else if (result == -4)
@@ -44,6 +81,45 @@ namespace BitNet.Desktop.Views
             else
             {
                 ShowError("Failed to unlock vault. Check your password and file path.");
+            }
+        }
+
+        private async void HelloButton_Click(object sender, RoutedEventArgs e)
+        {
+            var path = VaultPathBox.Text;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                ShowError("Please select a vault file first.");
+                return;
+            }
+            if (!WindowsHelloHelper.HasCredential(path))
+            {
+                ShowError("Windows Hello is not set up for this vault. Unlock with your master password first.");
+                return;
+            }
+            if (await WindowsHelloHelper.VerifyAsync("Unlock BitNet vault"))
+            {
+                var password = WindowsHelloHelper.RetrieveCredential(path);
+                if (string.IsNullOrEmpty(password))
+                {
+                    ShowError("Failed to retrieve saved password. Please unlock manually.");
+                    return;
+                }
+                var result = BitnetCore.SecureVaultUnlock(path, password);
+                if (result == 0)
+                {
+                    ErrorText.Visibility = Visibility.Collapsed;
+                    App.VaultPath = path;
+                    Frame.Navigate(typeof(VaultPage));
+                }
+                else
+                {
+                    ShowError("Failed to unlock vault with saved password.");
+                }
+            }
+            else
+            {
+                ShowError("Windows Hello verification failed or cancelled.");
             }
         }
 
@@ -63,7 +139,7 @@ namespace BitNet.Desktop.Views
             // Step 1: ask for master password
             var pwdDialog = new ContentDialog
             {
-                Title = "Create Vault — Set Password",
+                Title = "Create Vault ï¿½ Set Password",
                 Content = new PasswordBox { PlaceholderText = "Master password" },
                 PrimaryButtonText = "Next",
                 CloseButtonText = "Cancel",
@@ -77,7 +153,7 @@ namespace BitNet.Desktop.Views
             // Step 2: confirm password
             var confirmDialog = new ContentDialog
             {
-                Title = "Create Vault — Confirm Password",
+                Title = "Create Vault ï¿½ Confirm Password",
                 Content = new PasswordBox { PlaceholderText = "Confirm password" },
                 PrimaryButtonText = "Create",
                 CloseButtonText = "Cancel",
@@ -93,7 +169,7 @@ namespace BitNet.Desktop.Views
                 return;
             }
 
-            var result = BitnetCore.bitnet_vault_create(path, password);
+            var result = BitnetCore.SecureVaultCreate(path, password);
             if (result == 0)
             {
                 App.VaultPath = path;

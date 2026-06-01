@@ -24,7 +24,7 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
     uuid.copy_from_slice(&data[*offset..*offset + 16]);
     *offset += 16;
 
-    let name = deserialize_string(data, offset)?;
+    let name = deserialize_string_zeroizing(data, offset)?;
 
     if *offset + 4 > data.len() {
         return Err(KdbxError::InvalidFormat);
@@ -73,11 +73,11 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
         entry_uuid.copy_from_slice(&data[*offset..*offset + 16]);
         *offset += 16;
 
-        let title = deserialize_string(data, offset)?;
-        let username = deserialize_string(data, offset)?;
-        let password = Zeroizing::new(deserialize_string(data, offset)?);
-        let url = deserialize_string(data, offset)?;
-        let notes = deserialize_string(data, offset)?;
+        let title = deserialize_string_zeroizing(data, offset)?;
+        let username = deserialize_string_zeroizing(data, offset)?;
+        let password = deserialize_string_zeroizing(data, offset)?;
+        let url = deserialize_string_zeroizing(data, offset)?;
+        let notes = deserialize_string_zeroizing(data, offset)?;
 
         if *offset + 1 > data.len() {
             return Err(KdbxError::InvalidFormat);
@@ -86,7 +86,7 @@ fn deserialize_group(data: &[u8], offset: &mut usize) -> Result<Group, KdbxError
         *offset += 1;
 
         let totp_secret = if has_totp {
-            Some(Zeroizing::new(deserialize_string(data, offset)?))
+            Some(deserialize_string_zeroizing(data, offset)?)
         } else {
             None
         };

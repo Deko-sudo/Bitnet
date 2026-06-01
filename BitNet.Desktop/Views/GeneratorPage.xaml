@@ -33,12 +33,9 @@
                 </TextBox>
                 
                 <Button Grid.Column="1"
+                        Content="Copy"
                         Click="CopyButton_Click"
-                        Margin="8,0,0,0">
-                    <Button.Icon>
-                        <FontIcon Glyph="&#xE8C8;"/>
-                    </Button.Icon>
-                </Button>
+                        Margin="8,0,0,0"></Button>
             </Grid>
             
             <!-- Strength indicator -->
@@ -116,11 +113,7 @@
             <Button Content="Generate Password"
                     Click="GenerateButton_Click"
                     HorizontalAlignment="Stretch"
-                    Style="{StaticResource AccentButtonStyle}">
-                <Button.Icon>
-                    <FontIcon Glyph="&#xE9A1;"/>
-                </Button.Icon>
-            </Button>
+                    Style="{StaticResource AccentButtonStyle}"></Button>
         </StackPanel>
     </Grid>
 </Page>

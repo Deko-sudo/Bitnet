@@ -80,9 +80,14 @@ namespace BitNet.Desktop.Tests
             return JsonSerializer.Serialize(dict);
         }
 
-        // ===================================================================
-        // Tests
-        // ===================================================================
+        // Helper: convert JSON byte-array uuid to hex string
+        private static string UuidArrayToHex(JsonElement uuidElement)
+        {
+            var sb = new System.Text.StringBuilder(32);
+            foreach (var b in uuidElement.EnumerateArray())
+                sb.AppendFormat("{0:x2}", b.GetByte());
+            return sb.ToString();
+        }
 
         [Fact]
         public void Init_Succeeds()
@@ -107,8 +112,8 @@ namespace BitNet.Desktop.Tests
         {
             CreateAndUnlockVault();
 
-            // create root group via FFI
-            var groupUuidPtr = BitnetCore.bitnet_create_group("root", "Root");
+            // Create a top-level group  
+            var groupUuidPtr = BitnetCore.bitnet_create_group(null!, "TestGroup");
             Assert.NotEqual(IntPtr.Zero, groupUuidPtr);
             string groupUuid = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(groupUuidPtr) ?? "";
             BitnetCore.bitnet_free_string(groupUuidPtr);
@@ -135,7 +140,7 @@ namespace BitNet.Desktop.Tests
         {
             CreateAndUnlockVault();
 
-            var groupUuidPtr = BitnetCore.bitnet_create_group("root", "Root");
+            var groupUuidPtr = BitnetCore.bitnet_create_group(null!, "TestGroup");
             string groupUuid = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(groupUuidPtr) ?? "";
             BitnetCore.bitnet_free_string(groupUuidPtr);
 
@@ -146,13 +151,13 @@ namespace BitNet.Desktop.Tests
             int rc = BitnetCore.SecureAddEntry(groupUuid, entryJson);
             Assert.Equal(0, rc);
 
-            // Retrieve entry details to get UUID
+            // Get password via buffer API
             var listPtr = BitnetCore.bitnet_list_entries();
             string listJson = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(listPtr) ?? "[]";
             BitnetCore.bitnet_free_string(listPtr);
 
             using var doc = JsonDocument.Parse(listJson);
-            string entryUuid = doc.RootElement[0].GetProperty("uuid").GetString()!;
+            string entryUuid = UuidArrayToHex(doc.RootElement[0].GetProperty("uuid"));
 
             // Get password via buffer API
             var sb = new System.Text.StringBuilder(128);
@@ -166,7 +171,7 @@ namespace BitNet.Desktop.Tests
         {
             CreateAndUnlockVault();
 
-            var groupUuidPtr = BitnetCore.bitnet_create_group("root", "Root");
+            var groupUuidPtr = BitnetCore.bitnet_create_group(null!, "TestGroup");
             string groupUuid = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(groupUuidPtr) ?? "";
             BitnetCore.bitnet_free_string(groupUuidPtr);
 
@@ -177,17 +182,12 @@ namespace BitNet.Desktop.Tests
             int rc = BitnetCore.SecureAddEntry(groupUuid, entryJson);
             Assert.Equal(0, rc);
 
-            // Get details (json) and extract username
-            var detailsPtr = BitnetCore.bitnet_entry_get_details(
-                BitnetCore.bitnet_list_entries() != IntPtr.Zero
-                    ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(BitnetCore.bitnet_list_entries())!
-                    : "");
-            // Easier: use list_entries directly
+            // Get UUID from list_entries
             var listPtr = BitnetCore.bitnet_list_entries();
             string listJson = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(listPtr) ?? "[]";
             BitnetCore.bitnet_free_string(listPtr);
             using var doc = JsonDocument.Parse(listJson);
-            string entryUuid = doc.RootElement[0].GetProperty("uuid").GetString()!;
+            string entryUuid = UuidArrayToHex(doc.RootElement[0].GetProperty("uuid"));
 
             var detailPtr = BitnetCore.bitnet_entry_get_details(entryUuid);
             Assert.NotEqual(IntPtr.Zero, detailPtr);
@@ -204,7 +204,7 @@ namespace BitNet.Desktop.Tests
         {
             CreateAndUnlockVault();
 
-            var groupUuidPtr = BitnetCore.bitnet_create_group("root", "Root");
+            var groupUuidPtr = BitnetCore.bitnet_create_group(null!, "TestGroup");
             string groupUuid = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(groupUuidPtr) ?? "";
             BitnetCore.bitnet_free_string(groupUuidPtr);
 
@@ -220,7 +220,7 @@ namespace BitNet.Desktop.Tests
             string listJson = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(listPtr) ?? "[]";
             BitnetCore.bitnet_free_string(listPtr);
             using var doc = JsonDocument.Parse(listJson);
-            string entryUuid = doc.RootElement[0].GetProperty("uuid").GetString()!;
+            string entryUuid = UuidArrayToHex(doc.RootElement[0].GetProperty("uuid"));
 
             // Use buffered TOTP API
             var result = BitnetCore.GetTotpBuffered(entryUuid);
@@ -236,7 +236,7 @@ namespace BitNet.Desktop.Tests
         {
             CreateAndUnlockVault();
 
-            var groupUuidPtr = BitnetCore.bitnet_create_group("root", "Root");
+            var groupUuidPtr = BitnetCore.bitnet_create_group(null!, "TestGroup");
             string groupUuid = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(groupUuidPtr) ?? "";
             BitnetCore.bitnet_free_string(groupUuidPtr);
 
@@ -251,7 +251,7 @@ namespace BitNet.Desktop.Tests
             string listJson = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(listPtr) ?? "[]";
             BitnetCore.bitnet_free_string(listPtr);
             using var doc = JsonDocument.Parse(listJson);
-            string entryUuid = doc.RootElement[0].GetProperty("uuid").GetString()!;
+            string entryUuid = UuidArrayToHex(doc.RootElement[0].GetProperty("uuid"));
 
             // Delete
             rc = BitnetCore.bitnet_delete_entry(entryUuid);

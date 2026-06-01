@@ -65,7 +65,7 @@ namespace BitNet.Desktop.Views
             return "\uE8D7";
         }
 
-        private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+        private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
         {
             var filter = SearchBox.Text.ToLowerInvariant();
             EntriesList.ItemsSource = string.IsNullOrEmpty(filter)
@@ -103,6 +103,9 @@ namespace BitNet.Desktop.Views
                     Clipboard.SetContent(package);
                     ShowClipboardNotification("Password copied. Clipboard will clear in 30 seconds.");
                     StartClipboardClearTimer();
+                    // Best-effort clear of managed buffers (CLR does not guarantee zeroization)
+                    sb.Clear();
+                    password = string.Empty;
                 }
             }
         }
@@ -176,7 +179,7 @@ namespace BitNet.Desktop.Views
                 return;
             }
 
-            var saveResult = BitnetCore.bitnet_vault_save(App.VaultPath, password);
+            var saveResult = BitnetCore.SecureVaultSave(App.VaultPath, password);
             if (saveResult == 0)
             {
                 var okDialog = new ContentDialog

@@ -1,0 +1,55 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "checkOnSave": {
+          "command": "clippy",
+          "extraArgs": ["--workspace"]
+        },
+        "cargo": {
+          "targetDir": "target/zed"
+        }
+      }
+    },
+    "csharp-ls": {
+      "binary": {
+        "path": "dotnet",
+        "arguments": ["csharp-ls"]
+      },
+      "initialization_options": {
+        "msbuild": {
+          "search" : "sdk"
+        }
+      }
+    }
+  },
+  "format_on_save": {
+    "language": "Rust",
+    "enabled": true
+  },
+  "formatter": {
+    "language_server": {
+      "name": "rust-analyzer"
+    }
+  },
+  "languages": {
+    "Rust": {
+      "format_on_save": "on",
+      "tab_size": 4
+    },
+    "C#": {
+      "tab_size": 4
+    },
+    "XAML": {
+      "tab_size": 4
+    }
+  },
+  "soft_wrap": "editor_width",
+  "preferred_line_length": 100,
+  "terminal": {
+    "working_directory": "current_project_directory"
+  },
+  "project_panel": {
+    "dock": "left"
+  }
+}

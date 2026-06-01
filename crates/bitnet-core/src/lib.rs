@@ -1,6 +1,6 @@
 ﻿use bitnet_crypto::sha256;
 use bitnet_kdbx::{Entry, Group, KdbxError, load_vault, save_vault};
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -31,7 +31,7 @@ pub enum SessionState {
 
 /// Represents an active session with decrypted vault data.
 pub struct Session {
-    vault_path: String,
+    vault_path: Zeroizing<String>,
     groups: Vec<Group>,
     last_activity: Instant,
     auto_lock_duration: Duration,
@@ -106,7 +106,7 @@ impl Session {
 
 /// Centralized session manager implementing Zero Trust.
 pub struct SessionManager {
-    state: RwLock<Option<Session>>,
+    state: Mutex<Option<Session>>,
     default_auto_lock: Duration,
 }
 
@@ -119,7 +119,7 @@ impl Default for SessionManager {
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            state: RwLock::new(None),
+            state: Mutex::new(None),
             default_auto_lock: Duration::from_secs(300), // 5 minutes
         }
     }
@@ -127,13 +127,13 @@ impl SessionManager {
     #[cfg(test)]
     pub fn with_auto_lock(duration: Duration) -> Self {
         Self {
-            state: RwLock::new(None),
+            state: Mutex::new(None),
             default_auto_lock: duration,
         }
     }
 
     pub fn state(&self) -> SessionState {
-        let guard = self.state.read();
+        let guard = self.state.lock();
         match &*guard {
             Some(session) if !session.is_expired() => SessionState::Unlocked,
             _ => SessionState::Locked,
@@ -143,7 +143,7 @@ impl SessionManager {
     pub fn create_vault(&self, vault_path: &str, master_password: &[u8]) -> Result<(), CoreError> {
         let root = Group {
             uuid: new_uuid(),
-            name: "Root".into(),
+            name: Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![],
         };
@@ -153,9 +153,9 @@ impl SessionManager {
 
     pub fn unlock(&self, vault_path: &str, master_password: &[u8]) -> Result<(), CoreError> {
         let groups = load_vault(vault_path, master_password)?;
-        let mut state = self.state.write();
+        let mut state = self.state.lock();
         *state = Some(Session {
-            vault_path: vault_path.to_string(),
+            vault_path: Zeroizing::new(vault_path.to_string()),
             groups,
             last_activity: Instant::now(),
             auto_lock_duration: self.default_auto_lock,
@@ -164,12 +164,12 @@ impl SessionManager {
     }
 
     pub fn lock(&self) {
-        let mut state = self.state.write();
+        let mut state = self.state.lock();
         *state = None;
     }
 
     pub fn ensure_unlocked(&self) -> Result<(), CoreError> {
-        let guard = self.state.read();
+        let guard = self.state.lock();
         match &*guard {
             Some(session) if !session.is_expired() => Ok(()),
             _ => Err(CoreError::SessionLocked),
@@ -177,7 +177,7 @@ impl SessionManager {
     }
 
     pub fn touch(&self) {
-        let mut state = self.state.write();
+        let mut state = self.state.lock();
         if let Some(ref mut session) = *state {
             session.touch();
         }
@@ -185,15 +185,23 @@ impl SessionManager {
 
     pub fn get_password(&self, uuid: &[u8; 16]) -> Result<Zeroizing<String>, CoreError> {
         self.ensure_unlocked()?;
-        let guard = self.state.read();
+        let guard = self.state.lock();
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
         let entry = session.find_entry(uuid).ok_or(CoreError::EntryNotFound)?;
         Ok(entry.password.clone())
     }
 
+    pub fn get_entry_details(&self, uuid: &[u8; 16]) -> Result<(Zeroizing<String>, String), CoreError> {
+        self.ensure_unlocked()?;
+        let guard = self.state.lock();
+        let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
+        let entry = session.find_entry(uuid).ok_or(CoreError::EntryNotFound)?;
+        Ok((entry.password.clone(), entry.username.to_string()))
+    }
+
     pub fn get_totp(&self, uuid: &[u8; 16]) -> Result<Option<(String, u8)>, CoreError> {
         self.ensure_unlocked()?;
-        let guard = self.state.read();
+        let guard = self.state.lock();
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
         let entry = session.find_entry(uuid).ok_or(CoreError::EntryNotFound)?;
         if let Some(ref secret) = entry.totp_secret {
@@ -214,7 +222,7 @@ impl SessionManager {
 
     pub fn list_entries(&self) -> Result<Vec<EntrySummary>, CoreError> {
         self.ensure_unlocked()?;
-        let guard = self.state.read();
+        let guard = self.state.lock();
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
         let mut summaries = Vec::new();
         Self::collect_entries(&session.groups, &mut summaries);
@@ -238,7 +246,7 @@ impl SessionManager {
 
     pub fn add_entry(&self, group_uuid: &[u8; 16], entry: Entry) -> Result<(), CoreError> {
         self.ensure_unlocked()?;
-        let mut state = self.state.write();
+        let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
         if let Some(group) = session.find_group_mut(group_uuid) {
             group.entries.push(entry);
@@ -257,14 +265,14 @@ impl SessionManager {
     #[allow(clippy::too_many_arguments)]
     pub fn update_entry(&self, uuid: &[u8; 16], title: Option<String>, username: Option<String>, password: Option<Zeroizing<String>>, url: Option<String>, notes: Option<String>, totp_secret: Option<Option<Zeroizing<String>>>) -> Result<(), CoreError> {
         self.ensure_unlocked()?;
-        let mut state = self.state.write();
+        let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
         let entry = session.find_entry_mut(uuid).ok_or(CoreError::EntryNotFound)?;
-        if let Some(t) = title { entry.title = t; }
-        if let Some(u) = username { entry.username = u; }
+        if let Some(t) = title { entry.title = Zeroizing::new(t); }
+        if let Some(u) = username { entry.username = Zeroizing::new(u); }
         if let Some(p) = password { entry.password = p; }
-        if let Some(u) = url { entry.url = u; }
-        if let Some(n) = notes { entry.notes = n; }
+        if let Some(u) = url { entry.url = Zeroizing::new(u); }
+        if let Some(n) = notes { entry.notes = Zeroizing::new(n); }
         if let Some(t) = totp_secret { entry.totp_secret = t; }
         session.touch();
         Ok(())
@@ -272,7 +280,7 @@ impl SessionManager {
 
     pub fn delete_entry(&self, uuid: &[u8; 16]) -> Result<(), CoreError> {
         self.ensure_unlocked()?;
-        let mut state = self.state.write();
+        let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
         Self::delete_entry_in_groups(&mut session.groups, uuid)?;
         session.touch();
@@ -292,12 +300,12 @@ impl SessionManager {
 
     pub fn create_group(&self, parent_uuid: Option<&[u8; 16]>, name: &str) -> Result<[u8; 16], CoreError> {
         self.ensure_unlocked()?;
-        let mut state = self.state.write();
+        let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
         let uuid = new_uuid();
         let group = Group {
             uuid,
-            name: name.into(),
+            name: Zeroizing::new(name.to_string()),
             children: vec![],
             entries: vec![],
         };
@@ -313,7 +321,7 @@ impl SessionManager {
 
     pub fn save(&self, vault_path: &str, master_password: &[u8]) -> Result<(), CoreError> {
         self.ensure_unlocked()?;
-        let guard = self.state.read();
+        let guard = self.state.lock();
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
         save_vault(vault_path, &session.groups, master_password)?;
         Ok(())
@@ -323,9 +331,9 @@ impl SessionManager {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EntrySummary {
     pub uuid: [u8; 16],
-    pub title: String,
-    pub username: String,
-    pub url: String,
+    pub title: Zeroizing<String>,
+    pub username: Zeroizing<String>,
+    pub url: Zeroizing<String>,
     pub has_totp: bool,
 }
 
@@ -374,16 +382,16 @@ mod tests {
         // Add entry
         let entry = Entry {
             uuid: new_uuid(),
-            title: "GitHub".into(),
-            username: "alice".into(),
-            password: Zeroizing::new("secret123".into()),
-            url: "https://github.com".into(),
-            notes: "".into(),
+            title: Zeroizing::new("GitHub".to_string()),
+            username: Zeroizing::new("alice".to_string()),
+            password: Zeroizing::new("secret123".to_string()),
+            url: Zeroizing::new("https://github.com".to_string()),
+            notes: Zeroizing::new("".to_string()),
             totp_secret: None,
         };
         // We need root uuid. Use first group from loaded vault.
         {
-            let state = manager.state.read();
+            let state = manager.state.lock();
             let session = state.as_ref().unwrap();
             let root_uuid = session.groups[0].uuid;
             drop(state);
@@ -395,16 +403,16 @@ mod tests {
 
         // Verify update
         {
-            let state = manager.state.read();
+            let state = manager.state.lock();
             let session = state.as_ref().unwrap();
             let found = session.find_entry(&entry.uuid).unwrap();
-            assert_eq!(found.title, "GitHub Updated");
+            assert_eq!(found.title.as_str(), "GitHub Updated");
         }
 
         // Delete entry
         manager.delete_entry(&entry.uuid).unwrap();
         {
-            let state = manager.state.read();
+            let state = manager.state.lock();
             let session = state.as_ref().unwrap();
             assert!(session.find_entry(&entry.uuid).is_none());
         }
@@ -414,7 +422,7 @@ mod tests {
         manager.lock();
         manager.unlock(path, b"master").unwrap();
         {
-            let state = manager.state.read();
+            let state = manager.state.lock();
             let session = state.as_ref().unwrap();
             assert!(session.find_entry(&entry.uuid).is_none());
         }
@@ -434,7 +442,7 @@ mod auto_lock_tests {
         let path = "test_autolock.bitnet";
         let root = bitnet_kdbx::Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![],
         };

@@ -53,11 +53,7 @@
                     <Button x:Name="LockNowButton"
                             Content="Lock Vault Now"
                             Click="LockNow_Click"
-                            HorizontalAlignment="Left">
-                        <Button.Icon>
-                            <FontIcon Glyph="&#xE72E;"/>
-                        </Button.Icon>
-                    </Button>
+                            HorizontalAlignment="Left"></Button>
                 </StackPanel>
             </Grid>
             

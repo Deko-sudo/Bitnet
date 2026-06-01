@@ -1,0 +1,96 @@
+<Window x:Class="BitNet.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="BitNet Password Manager" Width="800" Height="600">
+  <TabControl>
+
+    <!-- Vault Tab -->
+    <TabItem Header="Vault">
+      <Grid Margin="12">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+          <TextBlock Text="Vault:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+          <TextBox x:Name="VaultPathBox" Width="280" Text="myvault.bitnet"/>
+          <TextBlock Text="Pass:" VerticalAlignment="Center" Margin="12,0,6,0"/>
+          <PasswordBox x:Name="VaultPassBox" Width="140"/>
+          <Button x:Name="BtnCreate" Content="Create" Margin="6,0,0,0" Click="BtnCreate_Click"/>
+          <Button x:Name="BtnUnlock" Content="Unlock" Margin="6,0,0,0" Click="BtnUnlock_Click"/>
+          <Button x:Name="BtnLock"   Content="Lock"   Margin="6,0,0,0" Click="BtnLock_Click"/>
+          <Button x:Name="BtnSave"   Content="Save"   Margin="6,0,0,0" Click="BtnSave_Click"/>
+          <Button x:Name="BtnPick"   Content="..."   Margin="6,0,0,0" Click="BtnPick_Click" Width="28"/>
+        </StackPanel>
+
+        <TextBlock x:Name="StatusText" Grid.Row="1" Text="Status: ready" Margin="0,0,0,8" Foreground="Gray"/>
+
+        <ListBox x:Name="EntriesList" Grid.Row="2">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" Width="180"/>
+                <TextBlock Text="{Binding Username}" Width="140"/>
+                <TextBlock Text="{Binding Url}" Foreground="Blue"/>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Grid>
+    </TabItem>
+
+    <!-- Add/Edit Tab -->
+    <TabItem Header="Add / Edit">
+      <ScrollViewer Margin="12">
+        <StackPanel MaxWidth="500" HorizontalAlignment="Left">
+          <TextBlock Text="Group UUID (16 hex zeros = Root):" Margin="0,0,0,4"/>
+          <TextBox x:Name="GroupUuidBox" Text="00000000000000000000000000000000"/>
+
+          <TextBlock Text="Title:" Margin="0,12,0,4"/>
+          <TextBox x:Name="EntryTitle"/>
+
+          <TextBlock Text="Username:" Margin="0,12,0,4"/>
+          <TextBox x:Name="EntryUsername"/>
+
+          <TextBlock Text="Password:" Margin="0,12,0,4"/>
+          <TextBox x:Name="EntryPassword"/>
+
+          <TextBlock Text="URL:" Margin="0,12,0,4"/>
+          <TextBox x:Name="EntryUrl"/>
+
+          <TextBlock Text="Notes:" Margin="0,12,0,4"/>
+          <TextBox x:Name="EntryNotes" AcceptsReturn="True" Height="60"/>
+
+          <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+            <Button x:Name="BtnAddEntry" Content="Add Entry" Click="BtnAddEntry_Click"/>
+            <Button x:Name="BtnDelEntry" Content="Delete Selected" Margin="8,0,0,0" Click="BtnDelEntry_Click"/>
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </TabItem>
+
+    <!-- Generator Tab -->
+    <TabItem Header="Generator">
+      <StackPanel Margin="12" MaxWidth="400" HorizontalAlignment="Left">
+        <TextBlock Text="Password Generator" FontSize="18" FontWeight="Bold" Margin="0,0,0,12"/>
+
+        <TextBlock Text="Length:"/>
+        <Slider x:Name="GenLength" Minimum="4" Maximum="64" Value="20" TickFrequency="1" IsSnapToTickEnabled="True"/>
+        <TextBlock x:Name="GenLengthLabel" Text="20" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+
+        <CheckBox x:Name="GenUpper" Content="Uppercase (A-Z)" IsChecked="True"/>
+        <CheckBox x:Name="GenLower" Content="Lowercase (a-z)" IsChecked="True"/>
+        <CheckBox x:Name="GenDigits" Content="Digits (0-9)" IsChecked="True"/>
+        <CheckBox x:Name="GenSymbols" Content="Symbols" IsChecked="True"/>
+        <CheckBox x:Name="GenAmbiguous" Content="Exclude ambiguous" IsChecked="False"/>
+
+        <Button x:Name="BtnGenerate" Content="Generate" Margin="0,12,0,0" Click="BtnGenerate_Click"/>
+
+        <TextBox x:Name="GenResult" Margin="0,12,0,0" IsReadOnly="True" FontFamily="Consolas" FontSize="16"/>
+      </StackPanel>
+    </TabItem>
+
+  </TabControl>
+</Window>

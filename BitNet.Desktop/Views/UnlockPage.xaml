@@ -39,11 +39,7 @@
                          Header="Vault file"
                          PlaceholderText="Select your .bitnet vault file..."
                          IsReadOnly="True"
-                         TextChanged="VaultPathBox_TextChanged">
-                    <TextBox.RightHeader>
-                        <Button x:Name="BrowseButton" Content="Browse" Click="BrowseButton_Click"/>
-                    </TextBox.RightHeader>
-                </TextBox>
+                         TextChanged="VaultPathBox_TextChanged"></TextBox>
                 
                 <PasswordBox x:Name="MasterPasswordBox" 
                              Header="Master password"
@@ -55,6 +51,13 @@
                         Click="UnlockButton_Click"
                         HorizontalAlignment="Stretch"
                         Style="{StaticResource AccentButtonStyle}"
+                        Margin="0,8,0,0"/>
+                
+                <Button x:Name="HelloButton"
+                        Content="Windows Hello"
+                        Click="HelloButton_Click"
+                        HorizontalAlignment="Stretch"
+                        Visibility="Collapsed"
                         Margin="0,8,0,0"/>
                 
                 <Button Content="Create New Vault"

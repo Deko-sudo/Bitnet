@@ -1,35 +1,36 @@
-﻿#[cfg(test)]
+#[cfg(test)]
 mod fuzz_tests {
     use crate::{load_vault, save_vault, Entry, Group, KdbxError};
     use rand::RngCore;
 
     fn try_load(data: &[u8], password: &[u8]) -> Result<Vec<Group>, KdbxError> {
-        let path = "fuzz_temp_test.bitnet";
-        std::fs::write(path, data).map_err(|e| KdbxError::Io(e))?;
-        let result = load_vault(path, password);
-        let _ = std::fs::remove_file(path);
+        let path = std::env::temp_dir().join("fuzz_temp_test.bitnet");
+        std::fs::write(&path, data).map_err(|e| KdbxError::Io(e))?;
+        let result = load_vault(path.to_str().unwrap(), password);
+        let _ = std::fs::remove_file(&path);
         result
     }
 
     fn make_small_vault() -> Vec<u8> {
         let entry = Entry {
             uuid: [1u8; 16],
-            title: "T".into(),
-            username: "U".into(),
-            password: zeroize::Zeroizing::new("P".into()),
-            url: "".into(),
-            notes: "".into(),
+            title: zeroize::Zeroizing::new("T".to_string()),
+            username: zeroize::Zeroizing::new("U".to_string()),
+            password: zeroize::Zeroizing::new("P".to_string()),
+            url: zeroize::Zeroizing::new("".to_string()),
+            notes: zeroize::Zeroizing::new("".to_string()),
             totp_secret: None,
         };
         let group = Group {
             uuid: [0u8; 16],
-            name: "R".into(),
+            name: zeroize::Zeroizing::new("R".to_string()),
             children: vec![],
             entries: vec![entry],
         };
-        save_vault("fuzz_small.bitnet", &[group], b"p").unwrap();
-        let data = std::fs::read("fuzz_small.bitnet").unwrap();
-        let _ = std::fs::remove_file("fuzz_small.bitnet");
+        let path = std::env::temp_dir().join("fuzz_small.bitnet");
+        save_vault(path.to_str().unwrap(), &[group], b"p").unwrap();
+        let data = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
         data
     }
 

@@ -29,30 +29,18 @@
             <Button Grid.Column="1"
                     Content="Refresh"
                     Click="Refresh_Click"
-                    Margin="12,0,0,0">
-                <Button.Icon>
-                    <FontIcon Glyph="&#xE72C;"/>
-                </Button.Icon>
-            </Button>
+                    Margin="12,0,0,0"></Button>
             
             <Button Grid.Column="2"
                     Content="Save Vault"
                     Click="SaveVault_Click"
-                    Margin="12,0,0,0">
-                <Button.Icon>
-                    <FontIcon Glyph="&#xE74E;"/>
-                </Button.Icon>
-            </Button>
+                    Margin="12,0,0,0"></Button>
             
             <Button Grid.Column="3"
                     Content="Add Entry"
                     Click="AddEntry_Click"
                     Margin="12,0,0,0"
-                    Style="{StaticResource AccentButtonStyle}">
-                <Button.Icon>
-                    <FontIcon Glyph="&#xE710;"/>
-                </Button.Icon>
-            </Button>
+                    Style="{StaticResource AccentButtonStyle}"></Button>
         </Grid>
         
         <!-- Entry count label -->
@@ -119,20 +107,12 @@
                             <Button Content="Copy"
                                     Click="CopyPassword_Click"
                                     Tag="{x:Bind UUID}"
-                                    Style="{StaticResource SubtleButtonStyle}">
-                                <Button.Icon>
-                                    <FontIcon Glyph="&#xE8C8;"/>
-                                </Button.Icon>
-                            </Button>
+                                    Style="{StaticResource SubtleButtonStyle}"></Button>
                             
                             <Button Content="Delete"
                                     Click="DeleteEntry_Click"
                                     Tag="{x:Bind UUID}"
-                                    Style="{StaticResource SubtleButtonStyle}">
-                                <Button.Icon>
-                                    <FontIcon Glyph="&#xE74D;"/>
-                                </Button.Icon>
-                            </Button>
+                                    Style="{StaticResource SubtleButtonStyle}"></Button>
                         </StackPanel>
                     </Grid>
                 </DataTemplate>

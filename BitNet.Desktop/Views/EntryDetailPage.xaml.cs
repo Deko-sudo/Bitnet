@@ -83,13 +83,11 @@ namespace BitNet.Desktop.Views
             {
                 PasswordHiddenBox.Visibility = Visibility.Collapsed;
                 PasswordVisibleBox.Visibility = Visibility.Visible;
-                RevealIcon.Glyph = "\uE7B3";
             }
             else
             {
                 PasswordHiddenBox.Visibility = Visibility.Visible;
                 PasswordVisibleBox.Visibility = Visibility.Collapsed;
-                RevealIcon.Glyph = "\uE7B3";
             }
         }
 

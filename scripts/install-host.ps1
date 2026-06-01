@@ -11,8 +11,9 @@
 
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory=$true)]
+    [string]$ExtensionId,
     [string]$HostName = "com.bitnet.nativehost",
-    [string]$ExtensionId = "",
     [string]$ChromeRegistryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName",
     [string]$EdgeRegistryPath = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName",
     [string]$FirefoxRegistryPath = "HKCU:\Software\Mozilla\NativeMessagingHosts\$HostName"
@@ -36,11 +37,8 @@ if (-not (Test-Path $HostExe)) {
 
 $HostExe = Resolve-Path $HostExe | Select-Object -ExpandProperty Path
 
-# Determine allowed_origins
-$allowedOrigins = @("chrome-extension://*/")
-if ($ExtensionId) {
-    $allowedOrigins = @("chrome-extension://$ExtensionId/")
-}
+# Determine allowed_origins (must be provided)
+$allowedOrigins = @("chrome-extension://$ExtensionId/")
 
 # Create manifest JSON
 $ManifestPath = Join-Path $ProjectRoot "browser-extension\$HostName.json"
@@ -55,9 +53,7 @@ $Manifest = @{
 
 $Manifest | Set-Content -Path $ManifestPath -Encoding UTF8
 Write-Host "[OK] Manifest written to: $ManifestPath" -ForegroundColor Green
-if (-not $ExtensionId) {
-    Write-Host "[WARN] allowed_origins is wildcard. For production, run with -ExtensionId your_id" -ForegroundColor Yellow
-}
+Write-Host "[INFO] Restricted to Chrome/Edge ExtensionId: $ExtensionId" -ForegroundColor Cyan
 
 # Register for Chrome
 if (-not (Test-Path (Split-Path $ChromeRegistryPath -Parent))) {
@@ -85,9 +81,8 @@ Write-Host "[OK] Firefox registry key: $FirefoxRegistryPath" -ForegroundColor Gr
 
 Write-Host "`nBitNet Native Messaging host installed successfully!" -ForegroundColor Cyan
 Write-Host "`nNext steps:"
-Write-Host "  1. Open Chrome/Edge/Firefox and navigate to extensions page"
-Write-Host "  2. Enable 'Developer mode' (Chrome/Edge) or 'Debug Add-ons' (Firefox)"
-Write-Host "  3. Click 'Load unpacked' / 'Load Temporary Add-on' and select:"
-Write-Host "     $(Join-Path $ProjectRoot "browser-extension")"
-Write-Host "  4. The extension will communicate with:"
+Write-Host "  1. Note your Extension ID from the browser extensions page"
+Write-Host "  2. Make sure it matches: $ExtensionId"
+Write-Host "  3. Load unpacked extension from browser-extension folder"
+Write-Host "  4. The native host executable is at:"
 Write-Host "     $HostExe"

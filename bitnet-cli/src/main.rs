@@ -4,8 +4,10 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "bitnet-cli")]
-#[command(about = "BitNet Password Manager CLI")]
+#[command(about = "BitNet Password Manager CLI\nWARNING: Passwords and TOTP codes are printed to stdout by default and may be retained in terminal scrollback.")]
 struct Cli {
+    #[arg(long, global = true, help = "Suppress printing of passwords and TOTP codes to stdout")]
+    no_echo: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -16,6 +18,9 @@ enum Commands {
     Unlock {
         /// Path to vault file
         path: String,
+        /// Master password (if omitted, prompt interactively)
+        #[arg(short, long)]
+        password: Option<String>,
     },
     /// Lock the current vault
     Lock,
@@ -61,6 +66,9 @@ enum Commands {
     Create {
         /// Path to new vault file
         path: String,
+        /// Master password (if omitted, prompt interactively)
+        #[arg(short, long)]
+        password: Option<String>,
     },
 }
 
@@ -70,15 +78,19 @@ fn validate_vault_path(path: &str) -> bool {
 
 fn main() {
     let cli = Cli::parse();
+    let no_echo = cli.no_echo;
     let manager = SessionManager::new();
 
     match cli.command {
-        Commands::Unlock { path } => {
+        Commands::Unlock { path, password } => {
             if !validate_vault_path(&path) {
                 eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
                 return;
             }
-            let password = rpassword::prompt_password("Master password: ").unwrap();
+            let password = match password {
+                Some(p) => p,
+                None => rpassword::prompt_password("Master password: ").unwrap(),
+            };
             match manager.unlock(&path, password.as_bytes()) {
                 Ok(()) => println!("Vault unlocked successfully."),
                 Err(e) => eprintln!("Failed to unlock vault: {}", e),
@@ -93,7 +105,7 @@ fn main() {
                 Ok(entries) => {
                     for entry in entries {
                         let totp_indicator = if entry.has_totp { " [TOTP]" } else { "" };
-                        println!("{} - {}{}", hex_uuid(&entry.uuid), entry.title, totp_indicator);
+                        println!("{} - {}{}", hex_uuid(&entry.uuid), entry.title.as_str(), totp_indicator);
                     }
                 }
                 Err(e) => eprintln!("Error: {}", e),
@@ -108,7 +120,11 @@ fn main() {
                 }
             };
             match manager.get_password(&uuid_bytes) {
-                Ok(password) => println!("{}", password.as_str()),
+                Ok(password) => {
+                    if !no_echo {
+                        println!("{}", password.as_str());
+                    }
+                }
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
@@ -122,7 +138,9 @@ fn main() {
             };
             match manager.get_totp(&uuid_bytes) {
                 Ok(Some((code, remaining))) => {
-                    println!("Code: {} (expires in {}s)", code, remaining);
+                    if !no_echo {
+                        println!("Code: {} (expires in {}s)", code, remaining);
+                    }
                 }
                 Ok(None) => println!("No TOTP configured for this entry."),
                 Err(e) => eprintln!("Error: {}", e),
@@ -145,7 +163,11 @@ fn main() {
                 exclude_ambiguous: ambiguous,
             };
             match manager.generate_password(&flags) {
-                Ok(pwd) => println!("{}", pwd),
+                Ok(pwd) => {
+                    if !no_echo {
+                        println!("{}", pwd);
+                    }
+                }
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
@@ -162,20 +184,26 @@ fn main() {
                 Err(e) => eprintln!("Failed to read file: {}", e),
             }
         }
-        Commands::Create { path } => {
+        Commands::Create { path, password } => {
             if !validate_vault_path(&path) {
                 eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
                 return;
             }
-            let password = rpassword::prompt_password("Set master password: ").unwrap();
-            let confirm = rpassword::prompt_password("Confirm master password: ").unwrap();
-            if password != confirm {
-                eprintln!("Passwords do not match.");
-                return;
-            }
+            let password = match password {
+                Some(p) => p,
+                None => {
+                    let pw = rpassword::prompt_password("Set master password: ").unwrap();
+                    let confirm = rpassword::prompt_password("Confirm master password: ").unwrap();
+                    if pw != confirm {
+                        eprintln!("Passwords do not match.");
+                        return;
+                    }
+                    pw
+                }
+            };
             let root = bitnet_kdbx::Group {
                 uuid: [0u8; 16],
-                name: "Root".to_string(),
+                name: zeroize::Zeroizing::new("Root".to_string()),
                 children: vec![],
                 entries: vec![],
             };
@@ -249,16 +277,16 @@ mod tests {
 
         let root = bitnet_kdbx::Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: zeroize::Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![bitnet_kdbx::Entry {
                 uuid: [1u8; 16],
-                title: "TestEntry".into(),
-                username: "testuser".into(),
-                password: zeroize::Zeroizing::new("testpass123".into()),
-                url: "https://example.com".into(),
-                notes: "".into(),
-                totp_secret: Some(zeroize::Zeroizing::new("JBSWY3DPEHPK3PXP".into())),
+                title: zeroize::Zeroizing::new("TestEntry".to_string()),
+                username: zeroize::Zeroizing::new("testuser".to_string()),
+                password: zeroize::Zeroizing::new("testpass123".to_string()),
+                url: zeroize::Zeroizing::new("https://example.com".to_string()),
+                notes: zeroize::Zeroizing::new("".to_string()),
+                totp_secret: Some(zeroize::Zeroizing::new("JBSWY3DPEHPK3PXP".to_string())),
             }],
         };
         bitnet_kdbx::save_vault(path, &[root], password).unwrap();
@@ -269,8 +297,8 @@ mod tests {
 
         let entries = manager.list_entries().unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].title, "TestEntry");
-        assert_eq!(entries[0].username, "testuser");
+        assert_eq!(entries[0].title.as_str(), "TestEntry");
+        assert_eq!(entries[0].username.as_str(), "testuser");
         assert!(entries[0].has_totp);
 
         let pwd = manager.get_password(&[1u8; 16]).unwrap();
@@ -313,7 +341,7 @@ mod tests {
         let path = "test_info.bitnet";
         let root = bitnet_kdbx::Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: zeroize::Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![],
         };
@@ -330,22 +358,22 @@ mod tests {
         let path = "test_create_cmd.bitnet";
         let root = bitnet_kdbx::Group {
             uuid: [0u8; 16],
-            name: "Root".into(),
+            name: zeroize::Zeroizing::new("Root".to_string()),
             children: vec![],
             entries: vec![bitnet_kdbx::Entry {
                 uuid: [1u8; 16],
-                title: "Email".into(),
-                username: "user".into(),
-                password: zeroize::Zeroizing::new("pass".into()),
-                url: "".into(),
-                notes: "".into(),
+                title: zeroize::Zeroizing::new("Email".to_string()),
+                username: zeroize::Zeroizing::new("user".to_string()),
+                password: zeroize::Zeroizing::new("pass".to_string()),
+                url: zeroize::Zeroizing::new("".to_string()),
+                notes: zeroize::Zeroizing::new("".to_string()),
                 totp_secret: None,
             }],
         };
         bitnet_kdbx::save_vault(path, &[root], b"masterpass").unwrap();
         let loaded = bitnet_kdbx::load_vault(path, b"masterpass").unwrap();
         assert_eq!(loaded[0].entries.len(), 1);
-        assert_eq!(loaded[0].entries[0].title, "Email");
+        assert_eq!(loaded[0].entries[0].title.as_str(), "Email");
         std::fs::remove_file(path).unwrap();
     }
 

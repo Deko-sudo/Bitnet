@@ -1,34 +1,17 @@
 using System;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace BitNet.Desktop.Native
 {
-    public static class BitnetCore
+    internal static class BitnetCore
     {
         private const string DllName = "bitnet_ffi.dll";
 
-        static BitnetCore()
-        {
-            var candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\target\release\bitnet_ffi.dll"));
-            if (File.Exists(candidate))
-            {
-                try
-                {
-                    NativeLibrary.Load(candidate);
-                }
-                catch
-                {
-                    // fallback to default DllImport resolution
-                }
-            }
-        }
-
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------
         // Raw pointer imports (used by secure wrappers below)
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------
         [DllImport(DllName, EntryPoint = "bitnet_vault_unlock")]
         private static extern int bitnet_vault_unlock_raw(IntPtr path, IntPtr password);
 
@@ -44,9 +27,9 @@ namespace BitNet.Desktop.Native
         [DllImport(DllName, EntryPoint = "bitnet_update_entry")]
         private static extern int bitnet_update_entry_raw(IntPtr uuid, IntPtr entryJson);
 
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------
         // Standard imports
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------
         [DllImport(DllName)]
         [return: MarshalAs(UnmanagedType.I4)]
         public static extern int bitnet_init();
@@ -62,9 +45,6 @@ namespace BitNet.Desktop.Native
         [DllImport(DllName)]
         [return: MarshalAs(UnmanagedType.I4)]
         public static extern int bitnet_entry_get_password([MarshalAs(UnmanagedType.LPUTF8Str)] string uuid, [MarshalAs(UnmanagedType.LPUTF8Str)] StringBuilder outBuf, nuint outLen);
-
-        [DllImport(DllName, EntryPoint = "bitnet_entry_get_totp_to_buffer")]
-        private static extern int bitnet_entry_get_totp_to_buffer_raw([MarshalAs(UnmanagedType.LPUTF8Str)] string uuid, [MarshalAs(UnmanagedType.LPUTF8Str)] StringBuilder outBuf, nuint outLen);
 
         [DllImport(DllName)]
         public static extern IntPtr bitnet_entry_get_totp([MarshalAs(UnmanagedType.LPUTF8Str)] string uuid);
@@ -93,9 +73,9 @@ namespace BitNet.Desktop.Native
         [return: MarshalAs(UnmanagedType.I4)]
         public static extern int bitnet_vault_fingerprint([MarshalAs(UnmanagedType.LPUTF8Str)] string path);
 
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------
         // Secure wrappers – zeroize temporary UTF-8 buffers after native call
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------------
         private static IntPtr Utf8ToPinnedPointer(string s, out GCHandle handle, out byte[] bytes)
         {
             bytes = Encoding.UTF8.GetBytes(s + "\0"); // null-terminated for CStr
@@ -185,27 +165,6 @@ namespace BitNet.Desktop.Native
                 ZeroizeAndFree(ref hJson, bJson); // entryJson may contain passwords
                 ZeroizeAndFree(ref hUuid, bUuid);
             }
-        }
-
-        /// <summary>
-        /// Get TOTP code and remaining seconds into a caller-provided buffer.
-        /// Returns (code, remaining) on success, null on failure.
-        /// </summary>
-        public static (string code, int remaining)? GetTotpBuffered(string uuid)
-        {
-            var sb = new StringBuilder(32);
-            int result = bitnet_entry_get_totp_to_buffer_raw(uuid, sb, (nuint)sb.Capacity);
-            if (result != 0)
-                return null;
-            string value = sb.ToString();
-            int commaIdx = value.LastIndexOf(',');
-            if (commaIdx < 0)
-                return null;
-            string code = value.Substring(0, commaIdx).Trim();
-            string remainingStr = value.Substring(commaIdx + 1).Trim();
-            if (int.TryParse(remainingStr, out int remaining))
-                return (code, remaining);
-            return null;
         }
     }
 }

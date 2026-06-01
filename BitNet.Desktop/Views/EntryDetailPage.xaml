@@ -29,68 +29,56 @@
             </StackPanel>
             
             <!-- Username -->
-            <TextBox x:Name="UsernameBox"
-                     Grid.Row="1"
-                     Header="Username"
-                     IsReadOnly="True"
-                     Margin="0,0,0,12">
-                <TextBox.RightHeader>
-                    <Button Content="Copy"
-                            Click="CopyUsername_Click"
-                            Style="{StaticResource SubtleButtonStyle}">
-                        <Button.Icon>
-                            <FontIcon Glyph="&#xE8C8;"/>
-                        </Button.Icon>
-                    </Button>
-                </TextBox.RightHeader>
-            </TextBox>
+            <Grid Grid.Row="1" Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="UsernameBox"
+                          Grid.Column="0"
+                          Header="Username"
+                          IsReadOnly="True"/>
+                <Button Grid.Column="1"
+                        Content="Copy"
+                        Click="CopyUsername_Click"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        VerticalAlignment="Bottom"
+                        Margin="8,0,0,0"/>
+            </Grid>
             
             <!-- Password -->
             <Grid Grid.Row="2" Margin="0,0,0,12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 
                 <PasswordBox x:Name="PasswordHiddenBox"
+                              Grid.Column="0"
                               Header="Password"
                               IsEnabled="False"
-                              Password="********">
-                    <PasswordBox.RightHeader>
-                        <Button x:Name="RevealButton"
-                                Click="RevealButton_Click"
-                                Style="{StaticResource SubtleButtonStyle}">
-                            <Button.Icon>
-                                <FontIcon x:Name="RevealIcon" Glyph="&#xE7B3;"/>
-                            </Button.Icon>
-                        </Button>
-                    </PasswordBox.RightHeader>
-                </PasswordBox>
+                              Password="********"/>
                 
                 <TextBox x:Name="PasswordVisibleBox"
                           Grid.Column="0"
                           Header="Password"
                           IsReadOnly="True"
-                          Visibility="Collapsed">
-                    <TextBox.RightHeader>
-                        <Button Click="RevealButton_Click"
-                                Style="{StaticResource SubtleButtonStyle}">
-                            <Button.Icon>
-                                <FontIcon Glyph="&#xE7B3;"/>
-                            </Button.Icon>
-                        </Button>
-                    </TextBox.RightHeader>
-                </TextBox>
+                          Visibility="Collapsed"/>
                 
-                <Button Grid.Column="1"
+                <Button x:Name="RevealButton"
+                        Grid.Column="1"
+                        Click="RevealButton_Click"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        VerticalAlignment="Bottom"
+                        Margin="8,0,0,0"
+                        Content="Reveal"/>
+                
+                <Button Grid.Column="2"
                         Content="Copy"
                         Click="CopyPassword_Click"
                         VerticalAlignment="Bottom"
-                        Margin="8,0,0,0">
-                    <Button.Icon>
-                        <FontIcon Glyph="&#xE8C8;"/>
-                    </Button.Icon>
-                </Button>
+                        Margin="8,0,0,0"/>
             </Grid>
             
             <!-- TOTP Section -->
@@ -119,29 +107,19 @@
                     <TextBlock Text="TOTP Code"
                                Style="{StaticResource CaptionTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}">
-                        <TextBlock.Transitions>
-                            <TransitionCollection/>
-                        </TextBlock.Transitions>
                     </TextBlock>
                     <TextBlock x:Name="TOTPCodeBlock"
                                Style="{StaticResource TitleTextBlockStyle}"
                                FontWeight="SemiBold"
                                FontSize="28"
                                CharacterSpacing="200">
-                        <TextBlock.Transitions>
-                            <TransitionCollection/>
-                        </TextBlock.Transitions>
                     </TextBlock>
                 </StackPanel>
                 
                 <Button Grid.Column="2"
                         Content="Copy"
                         Click="CopyTOTP_Click"
-                        VerticalAlignment="Center">
-                    <Button.Icon>
-                        <FontIcon Glyph="&#xE8C8;"/>
-                    </Button.Icon>
-                </Button>
+                        VerticalAlignment="Center"/>
             </Grid>
             
             <!-- Notes -->
@@ -160,9 +138,6 @@
                        Style="{StaticResource CaptionTextBlockStyle}"
                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                        Margin="0,0,0,20">
-                <TextBlock.Transitions>
-                    <TransitionCollection/>
-                </TextBlock.Transitions>
             </TextBlock>
             
             <!-- Action Buttons -->
@@ -175,27 +150,15 @@
                 
                 <Button Grid.Column="0"
                         Content="Edit"
-                        Click="EditEntry_Click">
-                    <Button.Icon>
-                        <FontIcon Glyph="&#xE70F;"/>
-                    </Button.Icon>
-                </Button>
+                        Click="EditEntry_Click"/>
                 
                 <Button Grid.Column="1"
                         Content="Delete"
-                        Click="DeleteEntry_Click">
-                    <Button.Icon>
-                        <FontIcon Glyph="&#xE74D;"/>
-                    </Button.Icon>
-                </Button>
+                        Click="DeleteEntry_Click"/>
                 
                 <Button Grid.Column="2"
                         Content="Back"
-                        Click="BackButton_Click">
-                    <Button.Icon>
-                        <FontIcon Glyph="&#xE72B;"/>
-                    </Button.Icon>
-                </Button>
+                        Click="BackButton_Click"/>
             </Grid>
             
             <!-- Clipboard clear notification -->

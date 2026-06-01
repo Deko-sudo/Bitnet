@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using BitNet.Desktop.Helpers;
 
 namespace BitNet.Desktop
 {
@@ -15,6 +16,13 @@ namespace BitNet.Desktop
         protected override void OnLaunched(LaunchActivatedEventArgs args)
         {
             MainWindow = new MainWindow();
+            MainWindow.Closed += (s, e) => {
+                if (!string.IsNullOrEmpty(VaultPath))
+                {
+                    WindowsHelloHelper.RemoveCredential(VaultPath);
+                }
+                BitNet.Desktop.Native.BitnetCore.bitnet_vault_lock();
+            };
             MainWindow.Activate();
         }
     }

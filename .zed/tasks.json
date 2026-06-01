@@ -1,0 +1,98 @@
+[
+  {
+    "label": "🦀 Rust: build release",
+    "command": "cargo build --release --workspace",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["build"]
+  },
+  {
+    "label": "🦀 Rust: build debug",
+    "command": "cargo build --workspace",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["build"]
+  },
+  {
+    "label": "🦀 Rust: test",
+    "command": "cargo test --workspace",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["test"]
+  },
+  {
+    "label": "🦀 Rust: clippy",
+    "command": "cargo clippy --workspace -- -D warnings",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["lint"]
+  },
+  {
+    "label": "📟 CLI: run --help",
+    "command": "./target/release/bitnet-cli.exe --help",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["run"]
+  },
+  {
+    "label": "📟 CLI: create vault",
+    "command": "./target/release/bitnet-cli.exe create demo.bitnet --password demopass",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["run"]
+  },
+  {
+    "label": "📟 CLI: unlock vault",
+    "command": "./target/release/bitnet-cli.exe unlock demo.bitnet --password demopass",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["run"]
+  },
+  {
+    "label": "📟 CLI: generate password",
+    "command": "./target/release/bitnet-cli.exe generate --length 20",
+    "cwd": "${workspaceFolder}/bitnet",
+    "tags": ["run"]
+  },
+  {
+    "label": "🔷 C# Demo: build debug",
+    "command": "dotnet build",
+    "cwd": "${workspaceFolder}/BitNet.Demo",
+    "tags": ["build"]
+  },
+  {
+    "label": "🔷 C# FFI Demo: run",
+    "command": "dotnet run",
+    "cwd": "${workspaceFolder}/BitNet.Demo",
+    "tags": ["run"]
+  },
+  {
+    "label": "🖥️ WPF: build debug",
+    "command": "dotnet build",
+    "cwd": "${workspaceFolder}/BitNet.Wpf",
+    "tags": ["build"]
+  },
+  {
+    "label": "🖥️ WPF: build release",
+    "command": "dotnet build -c Release",
+    "cwd": "${workspaceFolder}/BitNet.Wpf",
+    "tags": ["build"]
+  },
+  {
+    "label": "🖥️ WPF: run",
+    "command": "dotnet run",
+    "cwd": "${workspaceFolder}/BitNet.Wpf",
+    "tags": ["run"]
+  },
+  {
+    "label": "🪟 WinUI 3: build (MSBuild)",
+    "command": "powershell -ExecutionPolicy Bypass -File build-desktop.ps1",
+    "cwd": "${workspaceFolder}",
+    "tags": ["build"]
+  },
+  {
+    "label": "🪟 WinUI 3: run",
+    "command": "Start-Process .\\BitNet.Desktop\\bin\\x64\\Debug\\net9.0-windows10.0.19041.0\\BitNet.Desktop.exe",
+    "cwd": "${workspaceFolder}",
+    "tags": ["run"]
+  },
+  {
+    "label": "🧪 All: Rust tests + C# build",
+    "command": "cargo test --workspace && dotnet build BitNet.Wpf/BitNet.Wpf.csproj",
+    "cwd": "${workspaceFolder}",
+    "tags": ["test", "build"]
+  }
+]

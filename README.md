@@ -4,9 +4,9 @@ Offline password manager for Windows with Zero Trust architecture, built in Rust
 
 ## Features
 - **Zero Trust**: Auto-lock, memory zeroization, access mediation
-- **KDBX-compatible**: Uses Argon2id + AES-256-GCM + HMAC-SHA-256 (KDBX 4.x inspired)
+- **Custom vault format** (`.bitnet`): Argon2id + AES-256-GCM + HMAC-SHA-256 (KDBX 4.x inspired)
 - **TOTP**: RFC 6238 authenticator (SHA-1 & SHA-256)
-- **Password Generator**: CSPRNG-based with configurable rules
+- **Password Generator**: CSPRNG-based with rejection sampling
 - **Autofill**: Windows native + Browser extension (Chrome/Edge/Firefox)
 - **WinUI 3**: Fluent Design, Acrylic/Mica, dark theme support
 
@@ -43,6 +43,9 @@ cargo run --release --bin bitnet-cli -- unlock C:\Users\You\vault.bitnet
 
 # List entries
 cargo run --release --bin bitnet-cli -- list
+
+# Get password (use --no-echo to avoid terminal scrollback)
+cargo run --release --bin bitnet-cli -- get --no-echo <uuid>
 
 # Generate password
 cargo run --release --bin bitnet-cli -- generate --length 20
@@ -91,16 +94,20 @@ Or use the build script:
 ### 5. Run Tests
 
 ```bash
-# Rust unit tests (all 61 tests)
+# Rust unit tests (64+ tests across all crates)
 cargo test --workspace
 
-# Clippy (zero warnings)
+# Clippy (zero warnings policy)
 cargo clippy --workspace -- -D warnings
+
+# Format check
+cargo fmt --all -- --check
 
 # Fuzzing (requires Rust nightly)
 rustup toolchain install nightly
-cargo install cargo-fuzz
-rustup run nightly cargo fuzz run kdbx_deserialize -- -max_total_time=60
+rustup component add rust-src --toolchain nightly
+cargo +nightly install cargo-fuzz
+cargo +nightly fuzz run kdbx_deserialize -- -max_total_time=60
 ```
 
 ### 6. E2E Browser Tests (Playwright)
@@ -140,9 +147,21 @@ See [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) for details.
 
 ## Security
 
-See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for detailed threat model and ASVS mapping.
+- **[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)** — Detailed threat model, trust boundaries, and ASVS mapping (including accepted risks such as native host origin verification).
+- **[SECURITY_AUDIT.md](SECURITY_AUDIT.md)** — Security audit findings and their fixes.
+- **[docs/SECURITY_NOTES.md](docs/SECURITY_NOTES.md)** — Accepted security limitations and platform-specific considerations (.NET managed-heap strings, terminal scrollback, etc.).
 
-See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for security audit findings and fixes.
+### Key security properties
+
+| Property | Implementation |
+|----------|---------------|
+| Memory zeroization | `Zeroizing<String>` (Rust), `CryptographicOperations.ZeroMemory()` (C#) |
+| Locking | `Mutex`-based `SessionManager` — no writer starvation |
+| Password derivation | Argon2id (t=3, m=64 MB, p=4) |
+| Encryption | AES-256-GCM with unique nonce per vault |
+| Integrity | HMAC-SHA-256 over vault header |
+| Comparison | Constant-time `subtle::ConstantTimeEq` for TOTP and HMAC |
+| Path hardening | `validate_vault_path()` enforces `.bitnet` and rejects `..` |
 
 ## License
 

@@ -1,0 +1,92 @@
+[
+  {
+    "label": "🦀 Rust: debug CLI (generate)",
+    "adapter": {
+      "type": "lldb",
+      "executable": "C:/Program Files/LLVM/bin/lldb-dap.exe"
+    },
+    "configuration": {
+      "request": "launch",
+      "program": "${workspaceFolder}/bitnet/target/debug/bitnet-cli.exe",
+      "args": ["generate", "--length", "20"],
+      "cwd": "${workspaceFolder}/bitnet",
+      "preLaunchTask": "🦀 Rust: build debug",
+      "stopOnEntry": false
+    }
+  },
+  {
+    "label": "🦀 Rust: debug CLI (unlock)",
+    "adapter": {
+      "type": "lldb",
+      "executable": "C:/Program Files/LLVM/bin/lldb-dap.exe"
+    },
+    "configuration": {
+      "request": "launch",
+      "program": "${workspaceFolder}/bitnet/target/debug/bitnet-cli.exe",
+      "args": ["unlock", "demo.bitnet", "--password", "demopass"],
+      "cwd": "${workspaceFolder}/bitnet",
+      "preLaunchTask": "🦀 Rust: build debug",
+      "stopOnEntry": false
+    }
+  },
+  {
+    "label": "🦀 Rust: debug tests (bitnet-cli)",
+    "adapter": {
+      "type": "lldb",
+      "executable": "C:/Program Files/LLVM/bin/lldb-dap.exe"
+    },
+    "configuration": {
+      "request": "launch",
+      "program": "${workspaceFolder}/bitnet/target/debug/deps/bitnet_cli-*.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/bitnet",
+      "preLaunchTask": "🦀 Rust: test",
+      "stopOnEntry": false
+    }
+  },
+  {
+    "label": "🔷 C# Demo: debug (console)",
+    "adapter": {
+      "type": "netcoredbg",
+      "executable": "C:/Users/anror/AppData/Local/Microsoft/WinGet/Packages/Samsung.NetCoreDbg_Microsoft.Winget.Source_8wekyb3d8bbwe/netcoredbg/netcoredbg.exe",
+      "arguments": ["--interpreter=vscode"]
+    },
+    "configuration": {
+      "request": "launch",
+      "program": "${workspaceFolder}/BitNet.Demo/bin/Debug/net9.0/BitNet.Demo.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/BitNet.Demo",
+      "preLaunchTask": "🔷 C# Demo: build debug",
+      "stopOnEntry": false
+    }
+  },
+  {
+    "label": "🔷 C# WPF: debug",
+    "adapter": {
+      "type": "netcoredbg",
+      "executable": "C:/Users/anror/AppData/Local/Microsoft/WinGet/Packages/Samsung.NetCoreDbg_Microsoft.Winget.Source_8wekyb3d8bbwe/netcoredbg/netcoredbg.exe",
+      "arguments": ["--interpreter=vscode"]
+    },
+    "configuration": {
+      "request": "launch",
+      "program": "${workspaceFolder}/BitNet.Wpf/bin/Debug/net9.0-windows/BitNet.Wpf.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/BitNet.Wpf",
+      "preLaunchTask": "🖥️ WPF: build debug",
+      "stopOnEntry": false
+    }
+  },
+  {
+    "label": "🪟 WinUI 3: attach to Desktop",
+    "adapter": {
+      "type": "netcoredbg",
+      "executable": "C:/Users/anror/AppData/Local/Microsoft/WinGet/Packages/Samsung.NetCoreDbg_Microsoft.Winget.Source_8wekyb3d8bbwe/netcoredbg/netcoredbg.exe",
+      "arguments": ["--interpreter=vscode"]
+    },
+    "configuration": {
+      "request": "attach",
+      "processId": "${command:pickProcess}",
+      "stopOnEntry": false
+    }
+  }
+]

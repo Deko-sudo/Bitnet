@@ -16,6 +16,7 @@
 
 .PARAMETER CertificateThumbprint
     Thumbprint of certificate in Windows Certificate Store (CurrentUser\\My).
+    Recommended for CI to avoid decrypting PFX passwords into plaintext memory.
 
 .PARAMETER TimestampUrl
     RFC 3161 timestamp server URL. Default: http://timestamp.digicert.com
@@ -67,13 +68,20 @@ foreach ($binary in $binaries) {
         }
         $password = Read-Host -Prompt "Enter PFX password" -AsSecureString
         $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($password))
-        & $signtool sign `
-            /f "$CertificatePath" `
-            /p "$plainPassword" `
-            /tr "$TimestampUrl" `
-            /td sha256 `
-            /fd sha256 `
-            "$binary"
+        try {
+            & $signtool sign `
+                /f "$CertificatePath" `
+                /p "$plainPassword" `
+                /tr "$TimestampUrl" `
+                /td sha256 `
+                /fd sha256 `
+                "$binary"
+        } finally {
+            # Best-effort zeroization of plaintext password from memory
+            $plainPassword = '0' * $plainPassword.Length
+            $plainPassword = $null
+            [System.GC]::Collect()
+        }
     } elseif ($CertificateThumbprint) {
         & $signtool sign `
             /sha1 "$CertificateThumbprint" `
