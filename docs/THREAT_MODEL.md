@@ -57,6 +57,13 @@ BitNet is an offline password manager for Windows with Zero Trust architecture. 
 - Use `SecureZeroMemory` and locked pages where possible (future enhancement).
 - Windows VirtualLock for sensitive buffers (future).
 
+### 8. Native Host Origin Spoofing
+**Threat**: A sideloaded browser extension with a matching allowed extension ID communicates with the native host (`bitnet-native-host.exe`) over `stdin`/`stdout`. The host does not cryptographically verify the origin of incoming messages.
+**Mitigation**:
+- `allowed_origins` in the browser manifest restricts which extension IDs may connect.
+- OS/browser sandbox limits which extensions can launch the native host.
+**Accepted Risk**: The native host trusts the OS/browser sandbox to enforce extension identity. Full origin validation is not implemented because the native messaging protocol does not provide a cryptographically verifiable origin field.
+
 ## ASVS Mapping (OWASP ASVS 4.0)
 
 | ASVS ID | Requirement | Status |
@@ -66,6 +73,17 @@ BitNet is an offline password manager for Windows with Zero Trust architecture. 
 | V6.2.3 | Approved algorithms | Argon2id (PHC winner) |
 | V8.2.1 | Sensitive data protection | Zeroize, auto-lock |
 | V8.2.3 | Memory cleanup | Zeroizing on lock |
+
+## Accepted Risks Register
+
+| ID | Risk | Relevant Item(s) | Mitigation / Status | Accept Until |
+|----|------|-----------------|---------------------|--------------|
+| R001 | Wildcard `allowed_origins` allows any extension during development | [M-004](SECURITY_NOTES.md#m-004) | `scripts/install-host.ps1` requires `-ExtensionId`; placeholder in manifest prevents accidental wildcard | Production release |
+| R002 | DPAPI master key is bound to Windows user profile | N/A | No cross-user portability; migration to Windows Hello/TPM planned | v0.2 |
+| R003 | Managed-heap strings in C# GUI may retain secrets until GC | [L-001](SECURITY_NOTES.md#l-001), [L-003](SECURITY_NOTES.md#l-003) | Best-effort `StringBuilder.Clear()` and variable overwrite; .NET has no guaranteed string zeroization API | Pure-Rust GUI or `SecureZeroMemory` |
+| R004 | Clipboard is not auto-cleared after password copy | [L-004](SECURITY_NOTES.md#l-004) (see also [Accepted Risks in SECURITY.md](../SECURITY.md#accepted-risks-known-limitations)) | GUI planned auto-clear after 30 s (v0.2); CLI users warned to clear manually | v0.2 |
+| R005 | No HSM/TPM protection for master key material | N/A | Argon2id KDF slows brute-force; Windows Hello/TPM integration planned | v0.2 |
+| R006 | Ciphertext OOM via malicious `payload_len` in vault header | `load_vault` (Task 3.1) | `MAX_CIPHERTEXT_LENGTH = 100 MiB` hard ceiling enforced before allocation ([`crates/bitnet-kdbx/src/lib.rs`](../crates/bitnet-kdbx/src/lib.rs)) | MITIGATED in v0.1; accepted until permanent design |
 
 ## Future Work
 - TPM integration for key protection.
