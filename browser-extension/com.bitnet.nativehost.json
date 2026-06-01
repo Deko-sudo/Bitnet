@@ -1,10 +1,11 @@
 {
+  "_comment": "FOR PRODUCTION: Replace YOUR_EXTENSION_ID_HERE with your actual Chrome/Edge Extension ID. Never deploy with the wildcard chrome-extension://*/ — scripts/install-host.ps1 enforces a real ExtensionId.",
   "name": "com.bitnet.nativehost",
   "description": "BitNet Password Manager Native Host",
   "path": "REPLACE_WITH_ABSOLUTE_PATH_TO_BITNET_NATIVE_HOST_EXE",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://*/"
+    "chrome-extension://YOUR_EXTENSION_ID_HERE/"
   ],
   "allowed_extensions": [
     "bitnet@bitnet.dev"
