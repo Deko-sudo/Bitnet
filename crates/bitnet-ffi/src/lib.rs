@@ -33,7 +33,15 @@ fn to_c_string(s: &str) -> *mut c_char {
 
 /// Validate vault path: must end with .bitnet and not contain parent-dir traversal.
 fn validate_vault_path(path: &str) -> bool {
-    path.ends_with(".bitnet") && !path.contains("..")
+    if !path.ends_with(".bitnet") || path.contains("..") {
+        return false;
+    }
+    // Disallow wildcard / glob characters on all platforms
+    if path.contains('*') || path.contains('?') {
+        return false;
+    }
+    // Require absolute path (prevents relative traversal via symlink / cwd)
+    std::path::Path::new(path).is_absolute()
 }
 
 /// Initialize session manager. Call once before other functions.
@@ -564,10 +572,15 @@ mod tests {
     #[test]
     fn test_entry_get_totp_to_buffer() {
         bitnet_init();
-        let path = "test_totp_buf.bitnet\0";
+        let current_dir = std::env::current_dir().unwrap();
+        let vault_path = current_dir.join("test_totp_buf.bitnet");
+        let path_str = vault_path.to_str().unwrap();
+        let path = format!("{}\0", path_str);
         let pwd = "pass\0";
         let path_c = path.as_ptr() as *const c_char;
         let pwd_c = pwd.as_ptr() as *const c_char;
+        // Clean up any previous test file
+        let _ = std::fs::remove_file(&vault_path);
         assert_eq!(bitnet_vault_create(path_c, pwd_c), 0);
 
         let root_group = bitnet_create_group(std::ptr::null(), "Root\0".as_ptr() as *const c_char);

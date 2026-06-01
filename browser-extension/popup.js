@@ -4,21 +4,38 @@ const browserAPI = (typeof chrome !== 'undefined' && chrome.runtime) ? chrome : 
 
 document.getElementById("refresh").addEventListener("click", checkStatus);
 
+function clearEntries() {
+  while (entriesDiv.firstChild) {
+    entriesDiv.removeChild(entriesDiv.firstChild);
+  }
+}
+
+function setStatusText(text, cssClass) {
+  statusDiv.textContent = text;
+  statusDiv.className = cssClass;
+}
+
+function createTextDiv(text, cssClass) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  if (cssClass) div.className = cssClass;
+  div.style.padding = "8px";
+  div.style.color = "#666";
+  return div;
+}
+
 function checkStatus() {
-  entriesDiv.innerHTML = "";
+  clearEntries();
   browserAPI.runtime.sendMessage({ action: "is_unlocked" }, (response) => {
     if (browserAPI.runtime.lastError) {
-      statusDiv.textContent = "Error: " + browserAPI.runtime.lastError.message;
-      statusDiv.className = "status locked";
+      setStatusText("Error: " + browserAPI.runtime.lastError.message, "status locked");
       return;
     }
     if (response && response.success && response.unlocked) {
-      statusDiv.textContent = "Vault unlocked";
-      statusDiv.className = "status unlocked";
+      setStatusText("Vault unlocked", "status unlocked");
       loadEntries();
     } else {
-      statusDiv.textContent = "Vault locked — unlock in BitNet Desktop";
-      statusDiv.className = "status locked";
+      setStatusText("Vault locked â€” unlock in BitNet Desktop", "status locked");
     }
   });
 }
@@ -26,34 +43,37 @@ function checkStatus() {
 function loadEntries() {
   browserAPI.runtime.sendMessage({ action: "list_entries" }, (response) => {
     if (browserAPI.runtime.lastError || !response || !response.success) {
-      entriesDiv.innerHTML = "<div style='padding:8px;color:#666;'>No entries found.</div>";
+      entriesDiv.appendChild(createTextDiv("No entries found.", ""));
       return;
     }
     const entries = JSON.parse(response.data || "[]");
     if (entries.length === 0) {
-      entriesDiv.innerHTML = "<div style='padding:8px;color:#666;'>Vault is empty.</div>";
+      entriesDiv.appendChild(createTextDiv("Vault is empty.", ""));
       return;
     }
     entries.forEach(entry => {
       const div = document.createElement("div");
       div.className = "entry";
-      div.innerHTML = `<div class="entry-title">${escapeHtml(entry.title)}</div>
-                       <div class="entry-url">${escapeHtml(entry.username)} @ ${escapeHtml(entry.url)}</div>`;
+
+      const titleDiv = document.createElement("div");
+      titleDiv.className = "entry-title";
+      titleDiv.textContent = entry.title || "";
+
+      const urlDiv = document.createElement("div");
+      urlDiv.className = "entry-url";
+      urlDiv.textContent = (entry.username || "") + " @ " + (entry.url || "");
+
+      div.appendChild(titleDiv);
+      div.appendChild(urlDiv);
+
       div.addEventListener("click", () => {
-        // Copy username to clipboard and notify
         navigator.clipboard.writeText(entry.username || "").catch(() => {});
-        statusDiv.textContent = `Copied ${entry.title}`;
+        setStatusText("Copied " + (entry.title || ""), "status unlocked");
       });
+
       entriesDiv.appendChild(div);
     });
   });
-}
-
-function escapeHtml(text) {
-  if (!text) return "";
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
 }
 
 checkStatus();

@@ -15,6 +15,7 @@ obj/
 .vscode/
 .idea/
 *.sln
+.zed/
 
 # Fuzz
 corpus/
@@ -34,3 +35,15 @@ fuzz_temp*.bitnet
 # Native binaries (build artifacts, not source)
 *.dll
 *.exe
+
+# Build scripts (local only)
+*.bat
+*.ps1
+
+# Demo / test projects
+BitNet.Demo/
+BitNet.Wpf/
+BitNet.TestWindow/
+
+# Global configs (per-environment)
+global.json

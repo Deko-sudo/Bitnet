@@ -38,11 +38,16 @@ fn main() {
 
         let request: Request = match serde_json::from_slice(&msg_buf) {
             Ok(req) => req,
-            Err(e) => {
-                let _ = send_response(false, None, Some(e.to_string()));
+            Err(_e) => {
+                let _ = send_response(false, None, Some("Invalid request format".into()));
                 continue;
             }
         };
+
+        if request.action.len() > 64 {
+            let _ = send_response(false, None, Some("Action name too long".into()));
+            continue;
+        }
 
         match request.action.as_str() {
             "is_unlocked" => {
