@@ -1,4 +1,4 @@
-﻿# Rust
+# Rust
 /target/
 Cargo.lock
 **/*.rs.bk
@@ -48,4 +48,20 @@ BitNet.TestWindow/
 # Global configs (per-environment)
 global.jsonplaywright-report/
 test-results/
-*.bat
+
+# BitNet — local artifacts (not part of project source)
+bitnet-export.zip
+MERGE_ANALYSIS.md
+REVIEW_323d7fb.md
+pdf_text.txt
+vs_buildtools.exe
+nul
+.hermes/
+tools/
+nuget-scratch/
+pylibs/
+temp_winui_test/
+temp_wpf_test/
+
+# Build helper (local only)
+recomendation.md
