@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+pub mod locked;
+pub mod session_token;
 pub mod util;
 
 #[derive(Debug, Error)]

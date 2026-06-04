@@ -5,9 +5,17 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Enable DPAPI-protected session tokens (Windows-only, requires bitnet-dpapi).
+dpapi = ["dep:bitnet-dpapi"]
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_System_Memory"] }
-bitnet-dpapi = { workspace = true }
+bitnet-dpapi = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dependencies]
 serde = { workspace = true }

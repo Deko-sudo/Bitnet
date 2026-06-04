@@ -230,10 +230,15 @@ namespace BitNet.Desktop.Views
 
     public class VaultEntry
     {
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
         public string UUID { get; set; } = "";
+        [System.Text.Json.Serialization.JsonPropertyName("title")]
         public string Title { get; set; } = "";
+        [System.Text.Json.Serialization.JsonPropertyName("username")]
         public string Username { get; set; } = "";
+        [System.Text.Json.Serialization.JsonPropertyName("url")]
         public string Url { get; set; } = "";
+        [System.Text.Json.Serialization.JsonPropertyName("has_totp")]
         public bool HasTOTP { get; set; }
         public string IconGlyph { get; set; } = "\uE8D7";
     }
