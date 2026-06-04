@@ -409,6 +409,20 @@ mod tests {
         assert_eq!(hex_uuid(&uuid), "550e8400e29b41d4a716446655440000");
     }
 
+    /// P1 #3 regression: a --password CLI flag must NOT be accepted.
+    /// Passwords are sensitive and can leak via process listings / shell history
+    /// if passed on the command line. Master passwords are read interactively
+    /// from the TTY instead.
+    #[test]
+    fn test_no_password_cli_flag_rejected() {
+        use clap::Parser;
+        let args_ok: Vec<&str> = vec!["bitnet-cli", "list"];
+        assert!(Cli::try_parse_from(args_ok).is_ok());
+        let args_bad: Vec<&str> = vec!["bitnet-cli", "--password", "secret", "list"];
+        let res = Cli::try_parse_from(args_bad);
+        assert!(res.is_err(), "no --password flag should be accepted");
+    }
+
     #[test]
     fn test_parse_hex_uuid_with_dashes() {
         let uuid = parse_hex_uuid("550e8400-e29b-41d4-a716-446655440000").unwrap();

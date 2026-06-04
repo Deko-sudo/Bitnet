@@ -217,10 +217,14 @@ impl SessionManager {
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
         let entry = session.find_entry(uuid).ok_or(CoreError::EntryNotFound)?;
         if let Some(ref secret) = entry.totp_secret {
-            let (code, remaining) = bitnet_totp::generate_totp(
+            let digits = entry.totp_digits.unwrap_or(6);
+            let period = u64::from(entry.totp_period.unwrap_or(30));
+            let (code, remaining) = bitnet_totp::generate_totp_with_params(
                 secret,
                 current_timestamp(),
                 bitnet_totp::TotpAlgorithm::Sha1,
+                digits,
+                period,
             )?;
             Ok(Some((code, remaining)))
         } else {
@@ -317,20 +321,25 @@ impl SessionManager {
         self.ensure_unlocked()?;
         let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
-        Self::delete_entry_in_groups(&mut session.groups, uuid)?;
+        let removed = Self::delete_entry_in_groups(&mut session.groups, uuid)?;
+        if !removed {
+            return Err(CoreError::EntryNotFound);
+        }
         session.touch();
         Ok(())
     }
 
-    fn delete_entry_in_groups(groups: &mut [Group], uuid: &[u8; 16]) -> Result<(), CoreError> {
+    fn delete_entry_in_groups(groups: &mut [Group], uuid: &[u8; 16]) -> Result<bool, CoreError> {
         for group in groups {
             if let Some(pos) = group.entries.iter().position(|e| &e.uuid == uuid) {
                 group.entries.remove(pos);
-                return Ok(());
+                return Ok(true);
             }
-            Self::delete_entry_in_groups(&mut group.children, uuid)?;
+            if Self::delete_entry_in_groups(&mut group.children, uuid)? {
+                return Ok(true);
+            }
         }
-        Ok(())
+        Ok(false)
     }
 
     pub fn create_group(
@@ -390,11 +399,19 @@ impl SessionManager {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EntrySummary {
+    #[serde(serialize_with = "serialize_uuid_hex")]
     pub uuid: [u8; 16],
     pub title: Zeroizing<String>,
     pub username: Zeroizing<String>,
     pub url: Zeroizing<String>,
     pub has_totp: bool,
+}
+
+fn serialize_uuid_hex<S: serde::Serializer>(
+    uuid: &[u8; 16],
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&util::hex_encode(uuid))
 }
 
 fn new_uuid() -> [u8; 16] {
@@ -503,6 +520,61 @@ mod tests {
         }
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// P1 #7: TOTP digits/period on the entry must be honoured by get_totp.
+    /// An 8-digit TOTP secret must produce an 8-character code, not the
+    /// default 6 digits.
+    #[test]
+    fn test_totp_8_digits_propagates_from_entry() {
+        let manager = SessionManager::new();
+        let path = "test_totp8.bitnet";
+        manager.create_vault(path, b"master").unwrap();
+        let entry_uuid = [42u8; 16];
+        {
+            let mut state = manager.state.lock();
+            let session = state.as_mut().unwrap();
+            let entry = Entry {
+                uuid: entry_uuid,
+                title: Zeroizing::new("8-digit".into()),
+                username: Zeroizing::new("u".into()),
+                password: Zeroizing::new("p".into()),
+                url: Zeroizing::new("".into()),
+                notes: Zeroizing::new("".into()),
+                totp_secret: Some(Zeroizing::new("JBSWY3DPEHPK3PXP".into())),
+                totp_digits: Some(8),
+                totp_period: Some(30),
+                created_at: 0,
+                updated_at: 0,
+                accessed_at: 0,
+            };
+            session.groups[0].entries.push(entry);
+        }
+        let result = manager.get_totp(&entry_uuid).unwrap().unwrap();
+        assert_eq!(result.0.len(), 8, "8-digit TOTP should produce 8 chars");
+        std::fs::remove_file(path).ok();
+    }
+
+    /// P1 #6: EntrySummary serialises uuid as a hex string so the C#
+    /// WinUI frontend can match it against the JSON "uuid" field.
+    #[test]
+    fn test_entry_summary_uuid_is_hex_string() {
+        let s = EntrySummary {
+            uuid: [
+                0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+                0x00, 0x00,
+            ],
+            title: Zeroizing::new("GitHub".into()),
+            username: Zeroizing::new("u".into()),
+            url: Zeroizing::new("".into()),
+            has_totp: false,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""uuid":"550e8400e29b41d4a716446655440000""#),
+            "uuid must be hex string, got: {}",
+            json
+        );
     }
 }
 

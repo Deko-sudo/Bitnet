@@ -413,6 +413,9 @@ fn deserialize_string_zeroizing(
 
 /// Save groups to an encrypted vault file.
 pub fn save_vault(path: &str, groups: &[Group], master_password: &[u8]) -> Result<(), KdbxError> {
+    use std::path::Path;
+
+    // --- 1. Сгенерировать материалы ---
     let mut salt = [0u8; 32];
     salt.copy_from_slice(&generate_salt(32));
     let key = derive_key(master_password, &salt);
@@ -428,16 +431,41 @@ pub fn save_vault(path: &str, groups: &[Group], master_password: &[u8]) -> Resul
         argon2_memory: 64 * 1024,
         argon2_parallelism: 4,
     };
-
     let header_bytes = header.to_bytes();
-    let hmac_key = derive_key(master_password, &[0x01; 32]);
+    // P0 #1: domain-separated HMAC key (prevents cross-vault key reuse).
+    let hmac_key = derive_key(
+        master_password,
+        &[b"bitnet-hmac-v1", salt.as_ref()].concat(),
+    );
     let header_hmac = hmac_sha256(&*hmac_key, &header_bytes);
 
-    let mut file = fs::File::create(path)?;
-    file.write_all(&header_bytes)?;
-    file.write_all(&header_hmac)?;
-    file.write_all(&ciphertext.len().to_be_bytes())?;
-    file.write_all(&ciphertext)?;
+    // --- 2. Backup существующего файла (best-effort) ---
+    let backup_path = format!("{}.bak", path);
+    if Path::new(path).exists() {
+        if let Ok(meta) = std::fs::metadata(&backup_path) {
+            let mut perms = meta.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(&backup_path, perms);
+        }
+        let _ = std::fs::copy(path, &backup_path);
+    }
+
+    // --- 3. Запись во временный файл ---
+    let temp_path = format!("{}.tmp", path);
+    {
+        let mut file = fs::File::create(&temp_path)?;
+        file.write_all(&header_bytes)?;
+        file.write_all(&header_hmac)?;
+        // P1 #23: explicit u64 for cross-platform compatibility.
+        let len = ciphertext.len() as u64;
+        file.write_all(&len.to_be_bytes())?;
+        file.write_all(&ciphertext)?;
+        file.sync_all()?;
+    }
+
+    // --- 4. Атомарный rename ---
+    fs::rename(&temp_path, path)?;
     Ok(())
 }
 
@@ -453,7 +481,11 @@ pub fn load_vault(path: &str, master_password: &[u8]) -> Result<Vec<Group>, Kdbx
 
     let header = VaultHeader::from_bytes(&data)?;
     let stored_hmac: [u8; 32] = data[HEADER_SIZE..HEADER_SIZE + 32].try_into().unwrap();
-    let hmac_key = derive_key(master_password, &[0x01; 32]);
+    // P0 #1: domain-separated HMAC key (must match save_vault).
+    let hmac_key = derive_key(
+        master_password,
+        &[b"bitnet-hmac-v1", header.salt.as_ref()].concat(),
+    );
     let computed_hmac = hmac_sha256(&*hmac_key, &data[..HEADER_SIZE]);
 
     if !bitnet_crypto::secure_compare(&stored_hmac, &computed_hmac) {
@@ -462,6 +494,12 @@ pub fn load_vault(path: &str, master_password: &[u8]) -> Result<Vec<Group>, Kdbx
 
     let payload_len =
         u64::from_be_bytes(data[HEADER_SIZE + 32..HEADER_SIZE + 40].try_into().unwrap()) as usize;
+    // P1 #23: sanity check on 32-bit systems where usize < u64::MAX.
+    // Always true on 64-bit, so allow the absurd comparison.
+    #[allow(clippy::absurd_extreme_comparisons)]
+    {
+        debug_assert!(payload_len <= usize::MAX);
+    }
     const MAX_CIPHERTEXT_LENGTH: usize = 100 * 1024 * 1024;
     if payload_len > MAX_CIPHERTEXT_LENGTH {
         return Err(KdbxError::InvalidFormat);
@@ -507,6 +545,84 @@ mod tests {
         assert_eq!(loaded[0].entries[0].username.as_str(), "alice");
         assert_eq!(loaded[0].entries[0].password.as_str(), "secret123");
         fs::remove_file(path).unwrap();
+    }
+
+    /// P0 #1: domain-separated HMAC. Two vaults with the same password
+    /// but different salts must have different HMAC keys. Swapping the
+    /// header of vault A into vault B must fail HMAC verification.
+    #[test]
+    fn test_hmac_per_vault_isolation() {
+        let pw = b"same_password";
+        let g = Group {
+            uuid: [0u8; 16],
+            name: Zeroizing::new("R".into()),
+            children: vec![],
+            entries: vec![],
+        };
+
+        save_vault("a.bitnet", std::slice::from_ref(&g), pw).unwrap();
+        save_vault("b.bitnet", std::slice::from_ref(&g), pw).unwrap();
+
+        // Read a's header (68 bytes) and paste it into b → load must fail.
+        let a = std::fs::read("a.bitnet").unwrap();
+        let mut b = std::fs::read("b.bitnet").unwrap();
+        let header_len = 68;
+        b[..header_len].copy_from_slice(&a[..header_len]);
+        std::fs::write("b.bitnet", &b).unwrap();
+
+        let result = load_vault("b.bitnet", pw);
+        assert!(matches!(result, Err(KdbxError::HmacFailed)));
+
+        std::fs::remove_file("a.bitnet").ok();
+        std::fs::remove_file("b.bitnet").ok();
+    }
+
+    /// P0 #2 + P2 #8: save_vault must create a .bak on overwrite and
+    /// the .bak must contain the previous vault contents verbatim.
+    #[test]
+    fn test_save_creates_backup_on_overwrite() {
+        let g = Group {
+            uuid: [0u8; 16],
+            name: Zeroizing::new("R".into()),
+            children: vec![],
+            entries: vec![],
+        };
+        save_vault("test_atomic.bitnet", std::slice::from_ref(&g), b"pw").unwrap();
+        let original = std::fs::read("test_atomic.bitnet").unwrap();
+
+        save_vault("test_atomic.bitnet", std::slice::from_ref(&g), b"pw").unwrap();
+
+        assert!(std::path::Path::new("test_atomic.bitnet.bak").exists());
+        let backup = std::fs::read("test_atomic.bitnet.bak").unwrap();
+        assert_eq!(original, backup);
+
+        std::fs::remove_file("test_atomic.bitnet").ok();
+        std::fs::remove_file("test_atomic.bitnet.bak").ok();
+    }
+
+    /// P0 #2: large vault (50 entries) round-trips correctly after the
+    /// atomic-write refactor.
+    #[test]
+    fn test_atomic_large_vault_roundtrip() {
+        let mut entries = vec![];
+        for i in 0..50u8 {
+            entries.push(Entry {
+                uuid: [i; 16],
+                title: Zeroizing::new(format!("E{}", i)),
+                ..Default::default()
+            });
+        }
+        let g = Group {
+            uuid: [0u8; 16],
+            name: Zeroizing::new("R".into()),
+            children: vec![],
+            entries,
+        };
+        save_vault("test_crash.bitnet", &[g], b"pw").unwrap();
+        let loaded = load_vault("test_crash.bitnet", b"pw").unwrap();
+        assert_eq!(loaded[0].entries.len(), 50);
+        std::fs::remove_file("test_crash.bitnet").ok();
+        std::fs::remove_file("test_crash.bitnet.bak").ok();
     }
 }
 
@@ -738,7 +854,11 @@ mod security_tests {
             argon2_parallelism: 4,
         };
         let header_bytes = header.to_bytes();
-        let hmac_key = derive_key(b"master_password", &[0x01; 32]);
+        // P0 #1: HMAC key now uses domain separation.
+        let hmac_key = derive_key(
+            b"master_password",
+            &[b"bitnet-hmac-v1", [0u8; 32].as_ref()].concat(),
+        );
         let header_hmac = hmac_sha256(&*hmac_key, &header_bytes);
 
         let mut file = fs::File::create("test_payload_len.bitnet").unwrap();

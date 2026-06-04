@@ -30,6 +30,7 @@ Thumbs.db
 
 # Temporary test files
 *.bitnet
+*.bitnet.bak
 fuzz_temp*.bitnet
 
 # Native binaries (build artifacts, not source)
