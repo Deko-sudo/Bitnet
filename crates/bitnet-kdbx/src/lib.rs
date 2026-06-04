@@ -1,4 +1,4 @@
-﻿use bitnet_crypto::{decrypt, derive_key, encrypt, generate_salt, hmac_sha256};
+use bitnet_crypto::{decrypt, derive_key, encrypt, generate_salt, hmac_sha256};
 use std::fs;
 use std::io::{Read, Write};
 use thiserror::Error;
@@ -204,11 +204,19 @@ fn deserialize_entries(data: &[u8]) -> Result<Vec<Group>, KdbxError> {
     Ok(groups)
 }
 
-fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups: &mut usize, total_entries: &mut usize) -> Result<Group, KdbxError> {
+fn deserialize_group(
+    data: &[u8],
+    offset: &mut usize,
+    depth: usize,
+    total_groups: &mut usize,
+    total_entries: &mut usize,
+) -> Result<Group, KdbxError> {
     if depth > MAX_DESERIALIZE_DEPTH {
         return Err(KdbxError::InvalidFormat);
     }
-    *total_groups = total_groups.checked_add(1).ok_or(KdbxError::InvalidFormat)?;
+    *total_groups = total_groups
+        .checked_add(1)
+        .ok_or(KdbxError::InvalidFormat)?;
     if *total_groups > MAX_TOTAL_GROUPS {
         return Err(KdbxError::InvalidFormat);
     }
@@ -225,7 +233,10 @@ fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups
         return Err(KdbxError::InvalidFormat);
     }
     let child_count = u32::from_be_bytes([
-        data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
+        data[*offset],
+        data[*offset + 1],
+        data[*offset + 2],
+        data[*offset + 3],
     ]) as usize;
     *offset += 4;
 
@@ -239,14 +250,23 @@ fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups
         if marker != 0x01 {
             return Err(KdbxError::InvalidFormat);
         }
-        children.push(deserialize_group(data, offset, depth + 1, total_groups, total_entries)?);
+        children.push(deserialize_group(
+            data,
+            offset,
+            depth + 1,
+            total_groups,
+            total_entries,
+        )?);
     }
 
     if *offset + 4 > data.len() {
         return Err(KdbxError::InvalidFormat);
     }
     let entry_count = u32::from_be_bytes([
-        data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
+        data[*offset],
+        data[*offset + 1],
+        data[*offset + 2],
+        data[*offset + 3],
     ]) as usize;
     *offset += 4;
 
@@ -274,7 +294,9 @@ fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups
         let url = deserialize_string_zeroizing(data, offset)?;
         let notes = deserialize_string_zeroizing(data, offset)?;
 
-        *total_entries = total_entries.checked_add(1).ok_or(KdbxError::InvalidFormat)?;
+        *total_entries = total_entries
+            .checked_add(1)
+            .ok_or(KdbxError::InvalidFormat)?;
         if *total_entries > MAX_TOTAL_ENTRIES {
             return Err(KdbxError::InvalidFormat);
         }
@@ -366,20 +388,25 @@ fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups
     })
 }
 
-fn deserialize_string_zeroizing(data: &[u8], offset: &mut usize) -> Result<Zeroizing<String>, KdbxError> {
+fn deserialize_string_zeroizing(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<Zeroizing<String>, KdbxError> {
     if *offset + 4 > data.len() {
         return Err(KdbxError::InvalidFormat);
     }
     let len = u32::from_be_bytes([
-        data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
+        data[*offset],
+        data[*offset + 1],
+        data[*offset + 2],
+        data[*offset + 3],
     ]) as usize;
     *offset += 4;
     let end = offset.checked_add(len).ok_or(KdbxError::InvalidFormat)?;
     if end > data.len() {
         return Err(KdbxError::InvalidFormat);
     }
-    let s = String::from_utf8(data[*offset..end].to_vec())
-        .map_err(|_| KdbxError::InvalidFormat)?;
+    let s = String::from_utf8(data[*offset..end].to_vec()).map_err(|_| KdbxError::InvalidFormat)?;
     *offset = end;
     Ok(Zeroizing::new(s))
 }
@@ -433,7 +460,8 @@ pub fn load_vault(path: &str, master_password: &[u8]) -> Result<Vec<Group>, Kdbx
         return Err(KdbxError::HmacFailed);
     }
 
-    let payload_len = u64::from_be_bytes(data[HEADER_SIZE + 32..HEADER_SIZE + 40].try_into().unwrap()) as usize;
+    let payload_len =
+        u64::from_be_bytes(data[HEADER_SIZE + 32..HEADER_SIZE + 40].try_into().unwrap()) as usize;
     const MAX_CIPHERTEXT_LENGTH: usize = 100 * 1024 * 1024;
     if payload_len > MAX_CIPHERTEXT_LENGTH {
         return Err(KdbxError::InvalidFormat);
@@ -444,8 +472,7 @@ pub fn load_vault(path: &str, master_password: &[u8]) -> Result<Vec<Group>, Kdbx
     let ciphertext = &data[HEADER_SIZE + 40..HEADER_SIZE + 40 + payload_len];
 
     let key = derive_key(master_password, &header.salt);
-    let plaintext = decrypt(ciphertext, &key, &header.nonce)
-        .ok_or(KdbxError::DecryptionFailed)?;
+    let plaintext = decrypt(ciphertext, &key, &header.nonce).ok_or(KdbxError::DecryptionFailed)?;
 
     deserialize_entries(&plaintext)
 }
@@ -633,13 +660,15 @@ mod security_tests {
         assert!(matches!(result, Err(KdbxError::InvalidFormat)));
 
         // Truncated after marker (not enough bytes for UUID)
-        let result = deserialize_entries(b"\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00");
+        let result = deserialize_entries(
+            b"\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        );
         assert!(matches!(result, Err(KdbxError::InvalidFormat)));
 
         // Valid header + marker + UUID + partial name length
         let mut buf = vec![0x01u8];
         buf.extend_from_slice(&[0u8; 16]); // uuid
-        // name length = 4, but no name bytes follow
+                                           // name length = 4, but no name bytes follow
         buf.extend_from_slice(&[0u8, 0u8, 0u8, 4u8]);
         let result = deserialize_entries(&buf);
         assert!(matches!(result, Err(KdbxError::InvalidFormat)));

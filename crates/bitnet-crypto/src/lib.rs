@@ -30,8 +30,7 @@ pub fn validate_argon2_params(params: &argon2::Params) -> Result<(), &'static st
 
 /// Derive a 32-byte key from master password using Argon2id (t=3, m=64MB, p=4).
 pub fn derive_key(master_password: &[u8], salt: &[u8]) -> Zeroizing<Aes256GcmKey> {
-    let params =
-        argon2::Params::new(64 * 1024, 3, 4, Some(32)).expect("Argon2 params");
+    let params = argon2::Params::new(64 * 1024, 3, 4, Some(32)).expect("Argon2 params");
     assert!(
         validate_argon2_params(&params).is_ok(),
         "Weak Argon2 parameters detected"
@@ -50,9 +49,7 @@ pub fn encrypt(plaintext: &[u8], key: &Aes256GcmKey) -> (Vec<u8>, Aes256GcmNonce
     let mut nonce_bytes = [0u8; 12];
     RandOsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext)
-        .expect("Encryption failed");
+    let ciphertext = cipher.encrypt(nonce, plaintext).expect("Encryption failed");
     (ciphertext, nonce_bytes)
 }
 
@@ -218,9 +215,9 @@ impl PasswordStrength {
         // need a reasonable monotonic number.
         let charset_bits = match self {
             PasswordStrength::TooShort => 1.0,
-            PasswordStrength::Weak => 4.0,    // one class, e.g. lowercase
-            PasswordStrength::Fair => 6.0,    // two classes
-            PasswordStrength::Strong => 6.5,  // multi-class
+            PasswordStrength::Weak => 4.0, // one class, e.g. lowercase
+            PasswordStrength::Fair => 6.0, // two classes
+            PasswordStrength::Strong => 6.5, // multi-class
         };
         (length as f32) * charset_bits
     }
@@ -275,10 +272,9 @@ mod tests {
     fn test_sha256_known_value() {
         let hash = sha256(b"hello");
         let expected = [
-            0x2c, 0xf2, 0x4d, 0xba, 0x5f, 0xb0, 0xa3, 0x0e,
-            0x26, 0xe8, 0x3b, 0x2a, 0xc5, 0xb9, 0xe2, 0x9e,
-            0x1b, 0x16, 0x1e, 0x5c, 0x1f, 0xa7, 0x42, 0x5e,
-            0x73, 0x04, 0x33, 0x62, 0x93, 0x8b, 0x98, 0x24,
+            0x2c, 0xf2, 0x4d, 0xba, 0x5f, 0xb0, 0xa3, 0x0e, 0x26, 0xe8, 0x3b, 0x2a, 0xc5, 0xb9,
+            0xe2, 0x9e, 0x1b, 0x16, 0x1e, 0x5c, 0x1f, 0xa7, 0x42, 0x5e, 0x73, 0x04, 0x33, 0x62,
+            0x93, 0x8b, 0x98, 0x24,
         ];
         assert_eq!(hash, expected);
     }
@@ -450,10 +446,21 @@ mod extra_tests {
         let mut has_symbol = false;
         for _ in 0..100 {
             let pwd = generate_password(&flags);
-            if pwd.chars().any(|c| c.is_ascii_uppercase()) { has_upper = true; }
-            if pwd.chars().any(|c| c.is_ascii_lowercase()) { has_lower = true; }
-            if pwd.chars().any(|c| c.is_ascii_digit()) { has_digit = true; }
-            if pwd.chars().any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)) { has_symbol = true; }
+            if pwd.chars().any(|c| c.is_ascii_uppercase()) {
+                has_upper = true;
+            }
+            if pwd.chars().any(|c| c.is_ascii_lowercase()) {
+                has_lower = true;
+            }
+            if pwd.chars().any(|c| c.is_ascii_digit()) {
+                has_digit = true;
+            }
+            if pwd
+                .chars()
+                .any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c))
+            {
+                has_symbol = true;
+            }
         }
         assert!(has_upper, "Should generate uppercase");
         assert!(has_lower, "Should generate lowercase");

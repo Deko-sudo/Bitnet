@@ -11,7 +11,6 @@ pub enum TotpAlgorithm {
     Sha256,
 }
 
-
 impl std::str::FromStr for TotpAlgorithm {
     type Err = TotpError;
 
@@ -90,7 +89,10 @@ pub fn generate_totp_with_params(
     let counter = timestamp / period;
     let remaining = (period - (timestamp % period)) as u8;
     let code = hotp(&secret_bytes, counter, algorithm, digits);
-    Ok((format!("{:0width$}", code, width = digits as usize), remaining))
+    Ok((
+        format!("{:0width$}", code, width = digits as usize),
+        remaining,
+    ))
 }
 
 /// Verify a user-supplied TOTP code with ±1 window tolerance.
@@ -114,7 +116,9 @@ pub fn verify_totp_with_params(
 ) -> Result<bool, TotpError> {
     use subtle::ConstantTimeEq;
     if digits == 0 || digits > 10 || period == 0 {
-        return Err(TotpError::UnsupportedAlgorithm("invalid TOTP params".into()));
+        return Err(TotpError::UnsupportedAlgorithm(
+            "invalid TOTP params".into(),
+        ));
     }
     let secret_bytes = decode_base32(secret)?;
     let counter = timestamp / period;
@@ -200,7 +204,10 @@ pub fn parse_otpauth_uri(uri: &str) -> Result<OtpAuthParams, TotpError> {
 }
 
 /// Convenience: generate TOTP for the current system time.
-pub fn generate_totp_now(secret: &str, algorithm: TotpAlgorithm) -> Result<(String, u8), TotpError> {
+pub fn generate_totp_now(
+    secret: &str,
+    algorithm: TotpAlgorithm,
+) -> Result<(String, u8), TotpError> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -265,7 +272,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod extra_tests {
     use super::*;
@@ -274,7 +280,7 @@ mod extra_tests {
     fn test_totp_time_drift_tolerance() {
         let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
         let base_time = 60u64; // exactly at window boundary
-        // Code at time=60 should be valid at 60, 30, 90 (±1 window)
+                               // Code at time=60 should be valid at 60, 30, 90 (±1 window)
         let (code, _) = generate_totp(secret, base_time, TotpAlgorithm::Sha1).unwrap();
         assert!(verify_totp(secret, base_time, &code, TotpAlgorithm::Sha1).unwrap());
         assert!(verify_totp(secret, base_time + 30, &code, TotpAlgorithm::Sha1).unwrap());
@@ -323,23 +329,26 @@ mod extra_tests {
     fn test_totp_8_digits() {
         // otpauth://...?digits=8 should produce 8-character codes.
         let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
-        let (code, _) =
-            generate_totp_with_params(secret, 59, TotpAlgorithm::Sha1, 8, 30).unwrap();
+        let (code, _) = generate_totp_with_params(secret, 59, TotpAlgorithm::Sha1, 8, 30).unwrap();
         assert_eq!(code.len(), 8);
         // verify must accept the same length
         assert!(verify_totp_with_params(secret, 59, &code, TotpAlgorithm::Sha1, 8, 30).unwrap());
         // and must reject a 6-digit code at the same instant
-        assert!(!verify_totp_with_params(secret, 59, "287082", TotpAlgorithm::Sha1, 8, 30).unwrap());
+        assert!(
+            !verify_totp_with_params(secret, 59, "287082", TotpAlgorithm::Sha1, 8, 30).unwrap()
+        );
     }
 
     #[test]
     fn test_totp_period_60() {
         // otpauth://...?period=60 doubles the time step.
         let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
-        let (code_30, _) = generate_totp_with_params(secret, 60, TotpAlgorithm::Sha1, 6, 30).unwrap();
+        let (code_30, _) =
+            generate_totp_with_params(secret, 60, TotpAlgorithm::Sha1, 6, 30).unwrap();
         // At t=60 the period-30 counter is 2; the period-60 counter is 1.
         // The codes must therefore differ (different counter → different code).
-        let (code_60, _) = generate_totp_with_params(secret, 60, TotpAlgorithm::Sha1, 6, 60).unwrap();
+        let (code_60, _) =
+            generate_totp_with_params(secret, 60, TotpAlgorithm::Sha1, 6, 60).unwrap();
         assert_ne!(code_30, code_60);
     }
 
@@ -351,4 +360,3 @@ mod extra_tests {
         assert!(generate_totp_with_params(secret, 0, TotpAlgorithm::Sha1, 6, 0).is_err());
     }
 }
-

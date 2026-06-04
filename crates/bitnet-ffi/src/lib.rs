@@ -6,8 +6,8 @@
 #![allow(clippy::missing_safety_doc)]
 
 use bitnet_core::util;
-use bitnet_crypto::PasswordGeneratorFlags;
 use bitnet_core::{SessionManager, SessionState};
+use bitnet_crypto::PasswordGeneratorFlags;
 use bitnet_kdbx::Entry;
 use libc::{c_char, c_int};
 use std::ffi::{CStr, CString};
@@ -46,7 +46,10 @@ pub unsafe extern "C" fn bitnet_init() -> c_int {
 /// C string valid for the duration of the call. The function validates
 /// non-null and reads them as UTF-8 best-effort (`to_string_lossy`).
 #[no_mangle]
-pub unsafe extern "C" fn bitnet_vault_create(path: *const c_char, password: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_vault_create(
+    path: *const c_char,
+    password: *const c_char,
+) -> c_int {
     if path.is_null() || password.is_null() {
         return -1;
     }
@@ -67,7 +70,10 @@ pub unsafe extern "C" fn bitnet_vault_create(path: *const c_char, password: *con
 
 /// Unlock vault at given path with master password.
 #[no_mangle]
-pub unsafe extern "C" fn bitnet_vault_unlock(path: *const c_char, password: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_vault_unlock(
+    path: *const c_char,
+    password: *const c_char,
+) -> c_int {
     if path.is_null() || password.is_null() {
         return -1;
     }
@@ -122,7 +128,7 @@ pub unsafe extern "C" fn bitnet_vault_save(path: *const c_char, password: *const
     }
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     match sess.as_ref() {
-        Some(manager) => match manager.save(&path_str, Some(password_str.as_bytes())) {
+        Some(manager) => match manager.save(&path_str, password_str.as_bytes()) {
             Ok(()) => 0,
             Err(_) => -2,
         },
@@ -151,14 +157,13 @@ pub unsafe extern "C" fn bitnet_change_master_password(
     }
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     match sess.as_ref() {
-        Some(manager) => match manager.change_master_password(
-            &path_str,
-            old_str.as_bytes(),
-            new_str.as_bytes(),
-        ) {
-            Ok(()) => 0,
-            Err(_) => -2,
-        },
+        Some(manager) => {
+            match manager.change_master_password(&path_str, old_str.as_bytes(), new_str.as_bytes())
+            {
+                Ok(()) => 0,
+                Err(_) => -2,
+            }
+        }
         None => -3,
     }
 }
@@ -167,7 +172,10 @@ pub unsafe extern "C" fn bitnet_change_master_password(
 /// group_uuid and entry_json are UTF-8 null-terminated strings.
 /// entry_json format: {"uuid":"hex","title":"...","username":"...","password":"...","url":"...","notes":"...","totp_secret":"..."}
 #[no_mangle]
-pub unsafe extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_add_entry(
+    group_uuid: *const c_char,
+    entry_json: *const c_char,
+) -> c_int {
     if group_uuid.is_null() || entry_json.is_null() {
         return -1;
     }
@@ -187,20 +195,65 @@ pub unsafe extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json:
         Err(_) => return -6, // invalid json
     };
 
-    let entry_uuid = entry.get("uuid").and_then(|v| v.as_str()).and_then(uuid_from_hex).unwrap_or_else(|| {
-        let mut bytes = [0u8; 16];
-        use rand::Rng; let mut rng = rand::thread_rng(); rng.fill(&mut bytes);
-        bytes
-    });
+    let entry_uuid = entry
+        .get("uuid")
+        .and_then(|v| v.as_str())
+        .and_then(uuid_from_hex)
+        .unwrap_or_else(|| {
+            let mut bytes = [0u8; 16];
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            rng.fill(&mut bytes);
+            bytes
+        });
 
-    let title = Zeroizing::new(entry.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string());
-    let username = Zeroizing::new(entry.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string());
-    let password = Zeroizing::new(entry.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string());
-    let url = Zeroizing::new(entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string());
-    let notes = Zeroizing::new(entry.get("notes").and_then(|v| v.as_str()).unwrap_or("").to_string());
-    let totp_secret = entry.get("totp_secret").and_then(|v| v.as_str()).map(|s| Zeroizing::new(s.to_string()));
-    let totp_digits = entry.get("totp_digits").and_then(|v| v.as_u64()).map(|n| n as u32);
-    let totp_period = entry.get("totp_period").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let title = Zeroizing::new(
+        entry
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    );
+    let username = Zeroizing::new(
+        entry
+            .get("username")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    );
+    let password = Zeroizing::new(
+        entry
+            .get("password")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    );
+    let url = Zeroizing::new(
+        entry
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    );
+    let notes = Zeroizing::new(
+        entry
+            .get("notes")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    );
+    let totp_secret = entry
+        .get("totp_secret")
+        .and_then(|v| v.as_str())
+        .map(|s| Zeroizing::new(s.to_string()));
+    let totp_digits = entry
+        .get("totp_digits")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
+    let totp_period = entry
+        .get("totp_period")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
 
     let new_entry = Entry {
         uuid: entry_uuid,
@@ -230,7 +283,10 @@ pub unsafe extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json:
 /// Update entry by UUID.
 /// entry_json format same as bitnet_add_entry. Missing fields are left unchanged.
 #[no_mangle]
-pub unsafe extern "C" fn bitnet_update_entry(entry_uuid: *const c_char, entry_json: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_update_entry(
+    entry_uuid: *const c_char,
+    entry_json: *const c_char,
+) -> c_int {
     if entry_uuid.is_null() || entry_json.is_null() {
         return -1;
     }
@@ -250,19 +306,39 @@ pub unsafe extern "C" fn bitnet_update_entry(entry_uuid: *const c_char, entry_js
         Err(_) => return -6,
     };
 
-    let title = entry.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let username = entry.get("username").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let password = entry.get("password").and_then(|v| v.as_str()).map(|s| Zeroizing::new(s.to_string()));
-    let url = entry.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let notes = entry.get("notes").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let totp_secret = entry.get("totp_secret").and_then(|v| v.as_str()).map(|s| Some(Zeroizing::new(s.to_string())));
+    let title = entry
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let username = entry
+        .get("username")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let password = entry
+        .get("password")
+        .and_then(|v| v.as_str())
+        .map(|s| Zeroizing::new(s.to_string()));
+    let url = entry
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let notes = entry
+        .get("notes")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let totp_secret = entry
+        .get("totp_secret")
+        .and_then(|v| v.as_str())
+        .map(|s| Some(Zeroizing::new(s.to_string())));
 
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     match sess.as_ref() {
-        Some(manager) => match manager.update_entry(&uuid, title, username, password, url, notes, totp_secret) {
-            Ok(()) => 0,
-            Err(_) => -2,
-        },
+        Some(manager) => {
+            match manager.update_entry(&uuid, title, username, password, url, notes, totp_secret) {
+                Ok(()) => 0,
+                Err(_) => -2,
+            }
+        }
         None => -3,
     }
 }
@@ -290,7 +366,10 @@ pub unsafe extern "C" fn bitnet_delete_entry(entry_uuid: *const c_char) -> c_int
 
 /// Create a new group. Returns newly allocated C string with UUID. Caller must free with bitnet_free_string.
 #[no_mangle]
-pub unsafe extern "C" fn bitnet_create_group(parent_uuid: *const c_char, name: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn bitnet_create_group(
+    parent_uuid: *const c_char,
+    name: *const c_char,
+) -> *mut c_char {
     if name.is_null() {
         return std::ptr::null_mut();
     }
@@ -305,7 +384,10 @@ pub unsafe extern "C" fn bitnet_create_group(parent_uuid: *const c_char, name: *
     match sess.as_ref() {
         Some(manager) => match manager.create_group(parent.as_ref(), &name_str) {
             Ok(uuid) => {
-                let hex = uuid.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                let hex = uuid
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>();
                 to_c_string(&hex)
             }
             Err(_) => std::ptr::null_mut(),
@@ -450,7 +532,9 @@ pub unsafe extern "C" fn bitnet_entry_get_totp_to_buffer(
                 0
             }
             Ok(None) => {
-                unsafe { *out_buf = 0; }
+                unsafe {
+                    *out_buf = 0;
+                }
                 0
             }
             Err(_) => -1,
@@ -532,7 +616,10 @@ pub unsafe extern "C" fn bitnet_vault_fingerprint(path: *const c_char) -> *mut c
     match std::fs::read(&*path_str) {
         Ok(data) => {
             let hash = bitnet_crypto::sha256(&data);
-            let hex = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+            let hex = hash
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
             to_c_string(&hex)
         }
         Err(_) => std::ptr::null_mut(),
@@ -557,6 +644,7 @@ mod tests {
     unsafe fn vault_create(path: *const c_char, pwd: *const c_char) -> c_int {
         unsafe { bitnet_vault_create(path, pwd) }
     }
+    #[allow(dead_code)]
     unsafe fn vault_unlock(path: *const c_char, pwd: *const c_char) -> c_int {
         unsafe { bitnet_vault_unlock(path, pwd) }
     }
@@ -569,11 +657,7 @@ mod tests {
     unsafe fn create_group(parent: *const c_char, name: *const c_char) -> *mut c_char {
         unsafe { bitnet_create_group(parent, name) }
     }
-    unsafe fn entry_get_totp_to_buffer(
-        uuid: *const c_char,
-        buf: *mut c_char,
-        len: usize,
-    ) -> c_int {
+    unsafe fn entry_get_totp_to_buffer(uuid: *const c_char, buf: *mut c_char, len: usize) -> c_int {
         unsafe { bitnet_entry_get_totp_to_buffer(uuid, buf, len as libc::size_t) }
     }
     unsafe fn free_string(ptr: *mut c_char) {
@@ -611,8 +695,10 @@ mod tests {
 
     #[test]
     fn test_uuid_roundtrip() {
-        let original = [0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4,
-                        0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00];
+        let original = [
+            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x00,
+        ];
         let hex = uuid_to_hex(&original);
         let parsed = uuid_from_hex(&hex).unwrap();
         assert_eq!(original, parsed);
@@ -630,7 +716,9 @@ mod tests {
     #[test]
     fn test_util_validate_vault_path() {
         assert!(util::validate_vault_path("C:\\Users\\user\\vault.bitnet"));
-        assert!(!util::validate_vault_path("C:\\Windows\\System32\\config\\SAM"));
+        assert!(!util::validate_vault_path(
+            "C:\\Windows\\System32\\config\\SAM"
+        ));
         assert!(!util::validate_vault_path("C:\\Users\\..\\vault.bitnet"));
         assert!(!util::validate_vault_path("C:\\Users\\vault.txt"));
     }
@@ -656,15 +744,16 @@ mod tests {
         let _ = std::fs::remove_file(&vault_path);
         assert_eq!(unsafe { vault_create(path_c, pwd_c) }, 0);
 
-        let root_group = unsafe { create_group(std::ptr::null(), "Root\0".as_ptr() as *const c_char) };
+        let root_group = unsafe { create_group(std::ptr::null(), c"Root".as_ptr()) };
         assert!(!root_group.is_null());
         let root_uuid = unsafe { CStr::from_ptr(root_group).to_string_lossy().to_string() };
-        let entry_json = format!(
-            "{{\"uuid\":\"550e8400e29b41d4a716446655440000\",\"title\":\"Test\",\"username\":\"u\",\"password\":\"p\",\"url\":\"\",\"notes\":\"\",\"totp_secret\":\"JBSWY3DPEHPK3PXP\"}}"
-        );
+        let entry_json = r#"{"uuid":"550e8400e29b41d4a716446655440000","title":"Test","username":"u","password":"p","url":"","notes":"","totp_secret":"JBSWY3DPEHPK3PXP"}"#.to_string();
         let entry_json_c = CString::new(entry_json).unwrap();
         let root_uuid_c = CString::new(root_uuid.as_str()).unwrap();
-        assert_eq!(unsafe { add_entry(root_uuid_c.as_ptr(), entry_json_c.as_ptr()) }, 0);
+        assert_eq!(
+            unsafe { add_entry(root_uuid_c.as_ptr(), entry_json_c.as_ptr()) },
+            0
+        );
         unsafe { free_string(root_group) };
 
         let entry_uuid = "550e8400e29b41d4a716446655440000\0";

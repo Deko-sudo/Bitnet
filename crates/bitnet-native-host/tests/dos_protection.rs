@@ -1,4 +1,4 @@
-﻿use std::io::{Read, Write};
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 fn find_native_host_exe() -> Option<std::path::PathBuf> {
@@ -10,7 +10,9 @@ fn find_native_host_exe() -> Option<std::path::PathBuf> {
         .join("target")
         .join("debug");
     let exe = target_dir.join("bitnet-native-host.exe");
-    if exe.exists() { return Some(exe); }
+    if exe.exists() {
+        return Some(exe);
+    }
 
     // Fallback: target/debug from current exe
     let exe2 = std::env::current_exe()
@@ -18,14 +20,16 @@ fn find_native_host_exe() -> Option<std::path::PathBuf> {
         .ancestors()
         .nth(3)?
         .join("bitnet-native-host.exe");
-    if exe2.exists() { return Some(exe2); }
+    if exe2.exists() {
+        return Some(exe2);
+    }
 
     None
 }
 
 fn start_native_host() -> std::process::Child {
-    let exe = find_native_host_exe().expect(
-        "bitnet-native-host.exe not found. Build with: cargo build --workspace");
+    let exe = find_native_host_exe()
+        .expect("bitnet-native-host.exe not found. Build with: cargo build --workspace");
     Command::new(exe)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -63,14 +67,21 @@ fn test_oversized_message_rejected() {
     send_message(stdin, &msg);
 
     let resp = read_response(stdout);
-    assert!(resp.is_some(), "Should get a response for oversized message");
+    assert!(
+        resp.is_some(),
+        "Should get a response for oversized message"
+    );
     let resp = resp.unwrap();
     assert_eq!(resp["success"], false);
     let error = resp["error"].as_str().unwrap_or("");
-    assert!(error.contains("too large") || error.contains("large"),
-        "Expected 'too large' error, got: {}", error);
+    assert!(
+        error.contains("too large") || error.contains("large"),
+        "Expected 'too large' error, got: {}",
+        error
+    );
 
     child.kill().ok();
+    child.wait().ok();
 }
 
 #[test]
@@ -88,4 +99,5 @@ fn test_small_message_accepted() {
     assert!(resp.get("success").is_some());
 
     child.kill().ok();
+    child.wait().ok();
 }

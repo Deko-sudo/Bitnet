@@ -1,7 +1,7 @@
+use windows::Win32::Foundation::{LocalFree, HLOCAL};
 use windows::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
-use windows::Win32::Foundation::{HLOCAL, LocalFree};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DpapiError {

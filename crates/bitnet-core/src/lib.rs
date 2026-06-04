@@ -1,10 +1,11 @@
-﻿use bitnet_crypto::sha256;
-use bitnet_kdbx::{Entry, Group, KdbxError, load_vault, save_vault};
+use bitnet_crypto::sha256;
+use bitnet_kdbx::{load_vault, save_vault, Entry, Group, KdbxError};
 use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+pub mod util;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -14,6 +15,8 @@ pub enum CoreError {
     EntryNotFound,
     #[error("Group not found")]
     GroupNotFound,
+    #[error("Invalid password")]
+    InvalidPassword,
     #[error("KDBX error: {0}")]
     Kdbx(#[from] KdbxError),
     #[error("TOTP error: {0}")]
@@ -77,7 +80,10 @@ impl Session {
         None
     }
 
-    fn find_entry_mut_in_groups<'a>(groups: &'a mut [Group], uuid: &[u8; 16]) -> Option<&'a mut Entry> {
+    fn find_entry_mut_in_groups<'a>(
+        groups: &'a mut [Group],
+        uuid: &[u8; 16],
+    ) -> Option<&'a mut Entry> {
         for group in groups {
             for entry in &mut group.entries {
                 if &entry.uuid == uuid {
@@ -91,7 +97,10 @@ impl Session {
         None
     }
 
-    fn find_group_mut_in_groups<'a>(groups: &'a mut [Group], uuid: &[u8; 16]) -> Option<&'a mut Group> {
+    fn find_group_mut_in_groups<'a>(
+        groups: &'a mut [Group],
+        uuid: &[u8; 16],
+    ) -> Option<&'a mut Group> {
         for group in groups {
             if &group.uuid == uuid {
                 return Some(group);
@@ -191,7 +200,10 @@ impl SessionManager {
         Ok(entry.password.clone())
     }
 
-    pub fn get_entry_details(&self, uuid: &[u8; 16]) -> Result<(Zeroizing<String>, String), CoreError> {
+    pub fn get_entry_details(
+        &self,
+        uuid: &[u8; 16],
+    ) -> Result<(Zeroizing<String>, String), CoreError> {
         self.ensure_unlocked()?;
         let guard = self.state.lock();
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
@@ -205,19 +217,19 @@ impl SessionManager {
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
         let entry = session.find_entry(uuid).ok_or(CoreError::EntryNotFound)?;
         if let Some(ref secret) = entry.totp_secret {
-            let (code, remaining) = bitnet_totp::generate_totp(secret, current_timestamp(), bitnet_totp::TotpAlgorithm::Sha1)?;
+            let (code, remaining) = bitnet_totp::generate_totp(
+                secret,
+                current_timestamp(),
+                bitnet_totp::TotpAlgorithm::Sha1,
+            )?;
             Ok(Some((code, remaining)))
         } else {
             Ok(None)
         }
     }
 
-    pub fn generate_password(
-        &self,
-        flags: &bitnet_crypto::PasswordGeneratorFlags,
-    ) -> Result<String, CoreError> {
-        self.ensure_unlocked()?;
-        Ok(bitnet_crypto::generate_password(flags))
+    pub fn generate_password(&self, flags: &bitnet_crypto::PasswordGeneratorFlags) -> String {
+        bitnet_crypto::generate_password(flags)
     }
 
     pub fn list_entries(&self) -> Result<Vec<EntrySummary>, CoreError> {
@@ -263,17 +275,40 @@ impl SessionManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn update_entry(&self, uuid: &[u8; 16], title: Option<String>, username: Option<String>, password: Option<Zeroizing<String>>, url: Option<String>, notes: Option<String>, totp_secret: Option<Option<Zeroizing<String>>>) -> Result<(), CoreError> {
+    pub fn update_entry(
+        &self,
+        uuid: &[u8; 16],
+        title: Option<String>,
+        username: Option<String>,
+        password: Option<Zeroizing<String>>,
+        url: Option<String>,
+        notes: Option<String>,
+        totp_secret: Option<Option<Zeroizing<String>>>,
+    ) -> Result<(), CoreError> {
         self.ensure_unlocked()?;
         let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
-        let entry = session.find_entry_mut(uuid).ok_or(CoreError::EntryNotFound)?;
-        if let Some(t) = title { entry.title = Zeroizing::new(t); }
-        if let Some(u) = username { entry.username = Zeroizing::new(u); }
-        if let Some(p) = password { entry.password = p; }
-        if let Some(u) = url { entry.url = Zeroizing::new(u); }
-        if let Some(n) = notes { entry.notes = Zeroizing::new(n); }
-        if let Some(t) = totp_secret { entry.totp_secret = t; }
+        let entry = session
+            .find_entry_mut(uuid)
+            .ok_or(CoreError::EntryNotFound)?;
+        if let Some(t) = title {
+            entry.title = Zeroizing::new(t);
+        }
+        if let Some(u) = username {
+            entry.username = Zeroizing::new(u);
+        }
+        if let Some(p) = password {
+            entry.password = p;
+        }
+        if let Some(u) = url {
+            entry.url = Zeroizing::new(u);
+        }
+        if let Some(n) = notes {
+            entry.notes = Zeroizing::new(n);
+        }
+        if let Some(t) = totp_secret {
+            entry.totp_secret = t;
+        }
         session.touch();
         Ok(())
     }
@@ -298,7 +333,11 @@ impl SessionManager {
         Ok(())
     }
 
-    pub fn create_group(&self, parent_uuid: Option<&[u8; 16]>, name: &str) -> Result<[u8; 16], CoreError> {
+    pub fn create_group(
+        &self,
+        parent_uuid: Option<&[u8; 16]>,
+        name: &str,
+    ) -> Result<[u8; 16], CoreError> {
         self.ensure_unlocked()?;
         let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
@@ -310,7 +349,9 @@ impl SessionManager {
             entries: vec![],
         };
         if let Some(parent) = parent_uuid {
-            let parent_group = session.find_group_mut(parent).ok_or(CoreError::GroupNotFound)?;
+            let parent_group = session
+                .find_group_mut(parent)
+                .ok_or(CoreError::GroupNotFound)?;
             parent_group.children.push(group);
         } else {
             session.groups.push(group);
@@ -324,6 +365,25 @@ impl SessionManager {
         let guard = self.state.lock();
         let session = guard.as_ref().ok_or(CoreError::SessionLocked)?;
         save_vault(vault_path, &session.groups, master_password)?;
+        Ok(())
+    }
+
+    /// Меняет мастер-пароль разблокированного vault'а.
+    /// Требует активной unlocked-сессии и валидного `old_password` для проверки.
+    pub fn change_master_password(
+        &self,
+        vault_path: &str,
+        old_password: &[u8],
+        new_password: &[u8],
+    ) -> Result<(), CoreError> {
+        self.ensure_unlocked()?;
+        // Verify old password by attempting to load the on-disk vault.
+        // If the file was swapped, load_vault returns Err(KdbxError) and we
+        // surface it as InvalidPassword to the caller.
+        let _ = bitnet_kdbx::load_vault(vault_path, old_password)
+            .map_err(|_| CoreError::InvalidPassword)?;
+        // Re-encrypt the in-memory groups with the new password.
+        self.save(vault_path, new_password)?;
         Ok(())
     }
 }
@@ -378,7 +438,7 @@ mod tests {
         // Create group
         // Root group access not directly exposed via list_entries; fallback in add_entry handles it.
         // Actually, we need to access groups. Let's use save and reload to verify.
-        
+
         // Add entry
         let entry = Entry {
             uuid: new_uuid(),
@@ -388,6 +448,11 @@ mod tests {
             url: Zeroizing::new("https://github.com".to_string()),
             notes: Zeroizing::new("".to_string()),
             totp_secret: None,
+            totp_digits: None,
+            totp_period: None,
+            created_at: 0,
+            updated_at: 0,
+            accessed_at: 0,
         };
         // We need root uuid. Use first group from loaded vault.
         {
@@ -399,7 +464,17 @@ mod tests {
         }
 
         // Update entry
-        manager.update_entry(&entry.uuid, Some("GitHub Updated".into()), None, None, None, None, None).unwrap();
+        manager
+            .update_entry(
+                &entry.uuid,
+                Some("GitHub Updated".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
 
         // Verify update
         {

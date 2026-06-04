@@ -5,7 +5,7 @@ mod fuzz_tests {
 
     fn try_load(data: &[u8], password: &[u8]) -> Result<Vec<Group>, KdbxError> {
         let path = std::env::temp_dir().join("fuzz_temp_test.bitnet");
-        std::fs::write(&path, data).map_err(|e| KdbxError::Io(e))?;
+        std::fs::write(&path, data).map_err(KdbxError::Io)?;
         let result = load_vault(path.to_str().unwrap(), password);
         let _ = std::fs::remove_file(&path);
         result
@@ -22,6 +22,9 @@ mod fuzz_tests {
             totp_secret: None,
             totp_digits: None,
             totp_period: None,
+            created_at: 0,
+            updated_at: 0,
+            accessed_at: 0,
         };
         let group = Group {
             uuid: [0u8; 16],
