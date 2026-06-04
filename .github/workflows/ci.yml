@@ -11,7 +11,9 @@ env:
 
 jobs:
   rust:
-    runs-on: windows-latest
+    # windows-2025-vs2026 — successor of windows-latest; explicit avoids the
+    # 2026-06-15 redirect notice.
+    runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v4
 
