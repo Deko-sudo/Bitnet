@@ -9,6 +9,7 @@ members = [
     "crates/bitnet-native-host",
     "bitnet-cli",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
