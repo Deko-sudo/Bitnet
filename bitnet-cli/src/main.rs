@@ -1,6 +1,7 @@
 ﻿use bitnet_crypto::PasswordGeneratorFlags;
-use bitnet_core::SessionManager;
+use bitnet_core::{util, SessionManager};
 use clap::{Parser, Subcommand};
+use std::io::{self, BufRead, Write};
 
 #[derive(Parser)]
 #[command(name = "bitnet-cli")]
@@ -8,6 +9,9 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[arg(long, global = true, help = "Suppress printing of passwords and TOTP codes to stdout")]
     no_echo: bool,
+    /// Start interactive REPL where the unlocked session persists between commands.
+    #[arg(long, global = true)]
+    repl: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -18,9 +22,6 @@ enum Commands {
     Unlock {
         /// Path to vault file
         path: String,
-        /// Master password (if omitted, prompt interactively)
-        #[arg(short, long)]
-        password: Option<String>,
     },
     /// Lock the current vault
     Lock,
@@ -62,18 +63,16 @@ enum Commands {
         /// Path to vault file
         path: String,
     },
+    /// Change the master password of the currently unlocked vault
+    ChangePassword {
+        /// Path to vault file
+        path: String,
+    },
     /// Create a new vault
     Create {
         /// Path to new vault file
         path: String,
-        /// Master password (if omitted, prompt interactively)
-        #[arg(short, long)]
-        password: Option<String>,
     },
-}
-
-fn validate_vault_path(path: &str) -> bool {
-    path.ends_with(".bitnet") && !path.contains("..")
 }
 
 fn main() {
@@ -81,16 +80,18 @@ fn main() {
     let no_echo = cli.no_echo;
     let manager = SessionManager::new();
 
+    if cli.repl {
+        run_repl(manager, no_echo);
+        return;
+    }
+
     match cli.command {
-        Commands::Unlock { path, password } => {
-            if !validate_vault_path(&path) {
+        Commands::Unlock { path } => {
+            if !util::validate_vault_path(&path) {
                 eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
                 return;
             }
-            let password = match password {
-                Some(p) => p,
-                None => rpassword::prompt_password("Master password: ").unwrap(),
-            };
+            let password = rpassword::prompt_password("Master password: ").unwrap();
             match manager.unlock(&path, password.as_bytes()) {
                 Ok(()) => println!("Vault unlocked successfully."),
                 Err(e) => eprintln!("Failed to unlock vault: {}", e),
@@ -105,7 +106,7 @@ fn main() {
                 Ok(entries) => {
                     for entry in entries {
                         let totp_indicator = if entry.has_totp { " [TOTP]" } else { "" };
-                        println!("{} - {}{}", hex_uuid(&entry.uuid), entry.title.as_str(), totp_indicator);
+                        println!("{} - {}{}", hex_uuid(&entry.uuid.0), entry.title.as_str(), totp_indicator);
                     }
                 }
                 Err(e) => eprintln!("Error: {}", e),
@@ -162,52 +163,66 @@ fn main() {
                 include_symbols: symbols,
                 exclude_ambiguous: ambiguous,
             };
-            match manager.generate_password(&flags) {
-                Ok(pwd) => {
-                    if !no_echo {
-                        println!("{}", pwd);
-                    }
-                }
-                Err(e) => eprintln!("Error: {}", e),
+            let pwd = manager.generate_password(&flags);
+            if !no_echo {
+                println!("{}", pwd);
             }
         }
         Commands::Info { path } => {
-            if !validate_vault_path(&path) {
+            if !util::validate_vault_path(&path) {
                 eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
                 return;
             }
             match std::fs::read(&path) {
                 Ok(data) => {
                     let hash = bitnet_crypto::sha256(&data);
-                    println!("Fingerprint (SHA-256): {}", hex_encode(&hash));
+                    println!("Fingerprint (SHA-256): {}", util::hex_encode(&hash));
                 }
                 Err(e) => eprintln!("Failed to read file: {}", e),
             }
         }
-        Commands::Create { path, password } => {
-            if !validate_vault_path(&path) {
+        Commands::ChangePassword { path } => {
+            if !util::validate_vault_path(&path) {
+                eprintln!("Invalid vault path.");
+                return;
+            }
+            // In CLI mode there is no persistent session, so we cannot
+            // prove knowledge of the current master password from a stored
+            // key. We re-prompt and rely on a one-shot unlock + change.
+            let old = rpassword::prompt_password("Current master password: ").unwrap();
+            let new = rpassword::prompt_password("New master password: ").unwrap();
+            let confirm = rpassword::prompt_password("Confirm new master password: ").unwrap();
+            if new != confirm {
+                eprintln!("New passwords do not match.");
+                return;
+            }
+            if let Err(e) = manager.unlock(&path, old.as_bytes()) {
+                eprintln!("Unlock failed: {}", e);
+                return;
+            }
+            match manager.change_master_password(&path, old.as_bytes(), new.as_bytes()) {
+                Ok(()) => println!("Master password changed."),
+                Err(e) => eprintln!("Change failed: {}", e),
+            }
+        }
+        Commands::Create { path } => {
+            if !util::validate_vault_path(&path) {
                 eprintln!("Invalid vault path. Must be a .bitnet file without parent-dir traversal.");
                 return;
             }
-            let password = match password {
-                Some(p) => p,
-                None => {
-                    let pw = rpassword::prompt_password("Set master password: ").unwrap();
-                    let confirm = rpassword::prompt_password("Confirm master password: ").unwrap();
-                    if pw != confirm {
-                        eprintln!("Passwords do not match.");
-                        return;
-                    }
-                    pw
-                }
-            };
+            let pw = rpassword::prompt_password("Set master password: ").unwrap();
+            let confirm = rpassword::prompt_password("Confirm master password: ").unwrap();
+            if pw != confirm {
+                eprintln!("Passwords do not match.");
+                return;
+            }
             let root = bitnet_kdbx::Group {
                 uuid: [0u8; 16],
                 name: zeroize::Zeroizing::new("Root".to_string()),
                 children: vec![],
                 entries: vec![],
             };
-            match bitnet_kdbx::save_vault(&path, &[root], password.as_bytes()) {
+            match bitnet_kdbx::save_vault(&path, &[root], pw.as_bytes()) {
                 Ok(()) => println!("Vault created at {}", path),
                 Err(e) => eprintln!("Failed to create vault: {}", e),
             }
@@ -215,24 +230,151 @@ fn main() {
     }
 }
 
+/// Interactive REPL: keep a single SessionManager alive across commands so
+/// the user unlocks once, then issues many `list` / `get` / `totp` calls
+/// without re-entering the master password.
+fn run_repl(manager: SessionManager, no_echo_flag: bool) {
+    eprintln!("BitNet REPL. Type 'help' for commands, 'quit' to exit.");
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    let mut no_echo = no_echo_flag;
+    loop {
+        print!("bitnet> ");
+        let _ = stdout.flush();
+        let mut line = String::new();
+        let n = match stdin.lock().read_line(&mut line) {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if n == 0 {
+            break; // EOF
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.split_whitespace();
+        let cmd = match parts.next() {
+            Some(c) => c,
+            None => continue,
+        };
+        let args: Vec<&str> = parts.collect();
+        match cmd {
+            "quit" | "exit" => break,
+            "help" => print_repl_help(),
+            "echo" => {
+                no_echo = !no_echo;
+                eprintln!("echo {}", if no_echo { "off" } else { "on" });
+            }
+            "unlock" => {
+                if args.is_empty() {
+                    eprintln!("usage: unlock <path>");
+                    continue;
+                }
+                if !util::validate_vault_path(args[0]) {
+                    eprintln!("Invalid vault path.");
+                    continue;
+                }
+                let pw = rpassword::prompt_password("Master password: ").unwrap();
+                match manager.unlock(args[0], pw.as_bytes()) {
+                    Ok(()) => eprintln!("Vault unlocked."),
+                    Err(e) => eprintln!("Unlock failed: {}", e),
+                }
+            }
+            "lock" => {
+                manager.lock();
+                eprintln!("Vault locked.");
+            }
+            "list" => match manager.list_entries() {
+                Ok(entries) => {
+                    for entry in entries {
+                        let totp = if entry.has_totp { " [TOTP]" } else { "" };
+                        println!("{} - {}{}", hex_uuid(&entry.uuid.0), entry.title.as_str(), totp);
+                    }
+                }
+                Err(e) => eprintln!("Error: {}", e),
+            },
+            "get" => {
+                if args.is_empty() {
+                    eprintln!("usage: get <uuid>");
+                    continue;
+                }
+                let Some(uuid) = parse_hex_uuid(args[0]) else {
+                    eprintln!("Invalid UUID format");
+                    continue;
+                };
+                match manager.get_password(&uuid) {
+                    Ok(password) => {
+                        if !no_echo {
+                            println!("{}", password.as_str());
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+            }
+            "totp" => {
+                if args.is_empty() {
+                    eprintln!("usage: totp <uuid>");
+                    continue;
+                }
+                let Some(uuid) = parse_hex_uuid(args[0]) else {
+                    eprintln!("Invalid UUID format");
+                    continue;
+                };
+                match manager.get_totp(&uuid) {
+                    Ok(Some((code, remaining))) => {
+                        if !no_echo {
+                            println!("Code: {} (expires in {}s)", code, remaining);
+                        }
+                    }
+                    Ok(None) => println!("No TOTP configured for this entry."),
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+            }
+            "generate" => {
+                let len = args
+                    .first()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(16);
+                let flags = PasswordGeneratorFlags {
+                    length: len,
+                    include_uppercase: true,
+                    include_lowercase: true,
+                    include_digits: true,
+                    include_symbols: true,
+                    exclude_ambiguous: false,
+                };
+                let pwd = manager.generate_password(&flags);
+                if !no_echo {
+                    println!("{}", pwd);
+                }
+            }
+            other => eprintln!("Unknown command: {} (type 'help')", other),
+        }
+    }
+}
+
+fn print_repl_help() {
+    eprintln!(
+        "Commands:\n  \
+         unlock <path>  Unlock a vault\n  \
+         lock           Lock the current session\n  \
+         list           List all entries\n  \
+         get <uuid>     Print password for an entry\n  \
+         totp <uuid>    Print TOTP code for an entry\n  \
+         generate [len] Generate a random password (default 16)\n  \
+         echo           Toggle printing of secrets\n  \
+         help           Show this help\n  \
+         quit           Exit REPL"
+    );
+}
+
 fn parse_hex_uuid(s: &str) -> Option<[u8; 16]> {
-    let clean = s.replace("-", "");
-    if clean.len() != 32 {
-        return None;
-    }
-    let mut uuid = [0u8; 16];
-    for i in 0..16 {
-        uuid[i] = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(uuid)
+    util::uuid_from_hex(s)
 }
 
 fn hex_uuid(uuid: &[u8; 16]) -> String {
-    uuid.iter().map(|b| format!("{:02x}", b)).collect::<String>()
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+    util::hex_encode(uuid)
 }
 
 #[cfg(test)]
@@ -266,8 +408,8 @@ mod tests {
 
     #[test]
     fn test_hex_encode() {
-        assert_eq!(hex_encode(b"hello"), "68656c6c6f");
-        assert_eq!(hex_encode(b""), "");
+        assert_eq!(util::hex_encode(b"hello"), "68656c6c6f");
+        assert_eq!(util::hex_encode(b""), "");
     }
 
     #[test]
@@ -287,6 +429,8 @@ mod tests {
                 url: zeroize::Zeroizing::new("https://example.com".to_string()),
                 notes: zeroize::Zeroizing::new("".to_string()),
                 totp_secret: Some(zeroize::Zeroizing::new("JBSWY3DPEHPK3PXP".to_string())),
+                totp_digits: None,
+                totp_period: None,
             }],
         };
         bitnet_kdbx::save_vault(path, &[root], password).unwrap();
@@ -315,7 +459,7 @@ mod tests {
 
         let data = std::fs::read(path).unwrap();
         let hash = bitnet_crypto::sha256(&data);
-        let hex = hex_encode(&hash);
+        let hex = util::hex_encode(&hash);
         assert_eq!(hex.len(), 64);
 
         std::fs::remove_file(path).unwrap();
@@ -348,7 +492,7 @@ mod tests {
         bitnet_kdbx::save_vault(path, &[root], b"password").unwrap();
         let data = std::fs::read(path).unwrap();
         let hash = bitnet_crypto::sha256(&data);
-        let hex = hex_encode(&hash);
+        let hex = util::hex_encode(&hash);
         assert_eq!(hex.len(), 64);
         std::fs::remove_file(path).unwrap();
     }
@@ -368,6 +512,8 @@ mod tests {
                 url: zeroize::Zeroizing::new("".to_string()),
                 notes: zeroize::Zeroizing::new("".to_string()),
                 totp_secret: None,
+                totp_digits: None,
+                totp_period: None,
             }],
         };
         bitnet_kdbx::save_vault(path, &[root], b"masterpass").unwrap();
@@ -386,12 +532,12 @@ mod tests {
         assert_eq!(code.len(), 6);
         assert!(verify_totp(secret, now, &code, TotpAlgorithm::Sha256).unwrap());
     }
-}
 
     #[test]
     fn test_validate_vault_path_cli() {
-        assert!(validate_vault_path("C:\\Users\\user\\vault.bitnet"));
-        assert!(!validate_vault_path("C:\\Windows\\System32\\config\\SAM"));
-        assert!(!validate_vault_path("C:\\Users\\..\\vault.bitnet"));
-        assert!(!validate_vault_path("C:\\Users\\vault.txt"));
+        assert!(util::validate_vault_path("C:\\Users\\user\\vault.bitnet"));
+        assert!(!util::validate_vault_path("C:\\Windows\\System32\\config\\SAM"));
+        assert!(!util::validate_vault_path("C:\\Users\\..\\vault.bitnet"));
+        assert!(!util::validate_vault_path("C:\\Users\\vault.txt"));
     }
+}

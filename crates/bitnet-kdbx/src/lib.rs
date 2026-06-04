@@ -26,6 +26,35 @@ pub struct Entry {
     pub url: Zeroizing<String>,
     pub notes: Zeroizing<String>,
     pub totp_secret: Option<Zeroizing<String>>,
+    /// TOTP code length; None → RFC default of 6.
+    pub totp_digits: Option<u32>,
+    /// TOTP time step in seconds; None → RFC default of 30.
+    pub totp_period: Option<u32>,
+    /// Epoch seconds when the entry was first created. 0 if unknown.
+    pub created_at: u64,
+    /// Epoch seconds of the last mutation. 0 if unknown.
+    pub updated_at: u64,
+    /// Epoch seconds of the most recent read. 0 if unknown.
+    pub accessed_at: u64,
+}
+
+impl Default for Entry {
+    fn default() -> Self {
+        Self {
+            uuid: [0u8; 16],
+            title: Zeroizing::new(String::new()),
+            username: Zeroizing::new(String::new()),
+            password: Zeroizing::new(String::new()),
+            url: Zeroizing::new(String::new()),
+            notes: Zeroizing::new(String::new()),
+            totp_secret: None,
+            totp_digits: None,
+            totp_period: None,
+            created_at: 0,
+            updated_at: 0,
+            accessed_at: 0,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -129,7 +158,19 @@ fn serialize_group(buf: &mut Vec<u8>, group: &Group) {
         buf.push(has_totp);
         if let Some(ref secret) = entry.totp_secret {
             serialize_string(buf, secret);
+            // 0xFF marks that extended TOTP params follow (digits/period).
+            // Old format (no marker) is treated as RFC defaults (6/30).
+            buf.push(0xFF);
+            buf.extend_from_slice(&entry.totp_digits.unwrap_or(6).to_be_bytes());
+            buf.extend_from_slice(&entry.totp_period.unwrap_or(30).to_be_bytes());
         }
+        // 0xFE marks that timestamp fields follow (created/updated/accessed,
+        // each u64 LE = 24 bytes total). Absent marker means timestamps are
+        // unknown (0) — preserved for backward compatibility.
+        buf.push(0xFE);
+        buf.extend_from_slice(&entry.created_at.to_be_bytes());
+        buf.extend_from_slice(&entry.updated_at.to_be_bytes());
+        buf.extend_from_slice(&entry.accessed_at.to_be_bytes());
     }
 }
 
@@ -250,6 +291,57 @@ fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups
             None
         };
 
+        // Optional extended TOTP parameters, introduced after the secret as:
+        //   0xFF marker | digits (u32 BE) | period (u32 BE)
+        // When the marker is absent (old format), fall back to RFC defaults.
+        let mut totp_digits = None;
+        let mut totp_period = None;
+        if totp_secret.is_some() && *offset < data.len() && data[*offset] == 0xFF {
+            *offset += 1;
+            if *offset + 8 > data.len() {
+                return Err(KdbxError::InvalidFormat);
+            }
+            let digits = u32::from_be_bytes([
+                data[*offset],
+                data[*offset + 1],
+                data[*offset + 2],
+                data[*offset + 3],
+            ]);
+            *offset += 4;
+            let period = u32::from_be_bytes([
+                data[*offset],
+                data[*offset + 1],
+                data[*offset + 2],
+                data[*offset + 3],
+            ]);
+            *offset += 4;
+            totp_digits = Some(digits);
+            totp_period = Some(period);
+        }
+
+        // Optional timestamps block (introduced after TOTP, present on
+        // every entry regardless of TOTP). Absent marker means the entry
+        // was written by an old build and timestamps default to 0.
+        let mut created_at: u64 = 0;
+        let mut updated_at: u64 = 0;
+        let mut accessed_at: u64 = 0;
+        if *offset < data.len() && data[*offset] == 0xFE {
+            *offset += 1;
+            if *offset + 24 > data.len() {
+                return Err(KdbxError::InvalidFormat);
+            }
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&data[*offset..*offset + 8]);
+            created_at = u64::from_be_bytes(b);
+            *offset += 8;
+            b.copy_from_slice(&data[*offset..*offset + 8]);
+            updated_at = u64::from_be_bytes(b);
+            *offset += 8;
+            b.copy_from_slice(&data[*offset..*offset + 8]);
+            accessed_at = u64::from_be_bytes(b);
+            *offset += 8;
+        }
+
         entries.push(Entry {
             uuid: entry_uuid,
             title,
@@ -258,6 +350,11 @@ fn deserialize_group(data: &[u8], offset: &mut usize, depth: usize, total_groups
             url,
             notes,
             totp_secret,
+            totp_digits,
+            totp_period,
+            created_at,
+            updated_at,
+            accessed_at,
         });
     }
 
@@ -367,6 +464,7 @@ mod tests {
             url: Zeroizing::new("https://github.com".to_string()),
             notes: Zeroizing::new("".to_string()),
             totp_secret: Some(Zeroizing::new("JBSWY3DPEHPK3PXP".into())),
+            ..Default::default()
         };
         let group = Group {
             uuid: [0u8; 16],
@@ -400,6 +498,7 @@ mod extra_tests {
                 url: Zeroizing::new("https://github.com".to_string()),
                 notes: Zeroizing::new("".to_string()),
                 totp_secret: None,
+                ..Default::default()
             },
             Entry {
                 uuid: [2u8; 16],
@@ -409,6 +508,7 @@ mod extra_tests {
                 url: Zeroizing::new("https://gmail.com".to_string()),
                 notes: Zeroizing::new("important".to_string()),
                 totp_secret: Some(Zeroizing::new("SECRET123".into())),
+                ..Default::default()
             },
         ];
         let group = Group {
@@ -441,6 +541,7 @@ mod extra_tests {
                 url: Zeroizing::new("".to_string()),
                 notes: Zeroizing::new("".to_string()),
                 totp_secret: None,
+                ..Default::default()
             }],
         };
         let root = Group {
@@ -468,6 +569,7 @@ mod extra_tests {
             url: Zeroizing::new("".to_string()),
             notes: Zeroizing::new("".to_string()),
             totp_secret: None,
+            ..Default::default()
         };
         let group = Group {
             uuid: [0u8; 16],
@@ -492,6 +594,7 @@ mod extra_tests {
             url: Zeroizing::new("".to_string()),
             notes: Zeroizing::new("".to_string()),
             totp_secret: None,
+            ..Default::default()
         };
         let group = Group {
             uuid: [0u8; 16],

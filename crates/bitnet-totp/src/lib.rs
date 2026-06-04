@@ -42,7 +42,8 @@ pub fn decode_base32(input: &str) -> Result<Vec<u8>, TotpError> {
 }
 
 /// Compute HOTP value according to RFC 4226.
-pub fn hotp(secret: &[u8], counter: u64, algorithm: TotpAlgorithm) -> u32 {
+/// `digits` controls the truncation width (typically 6 or 8).
+pub fn hotp(secret: &[u8], counter: u64, algorithm: TotpAlgorithm, digits: u32) -> u32 {
     let counter_bytes = counter.to_be_bytes();
     let mac = match algorithm {
         TotpAlgorithm::Sha1 => hmac_sha1(secret, &counter_bytes).to_vec(),
@@ -53,21 +54,43 @@ pub fn hotp(secret: &[u8], counter: u64, algorithm: TotpAlgorithm) -> u32 {
         | ((mac[offset + 1]) as u32) << 16
         | ((mac[offset + 2]) as u32) << 8
         | ((mac[offset + 3]) as u32);
-    code % 1_000_000
+    let modulus = 10u32.checked_pow(digits).unwrap_or(1_000_000);
+    code % modulus
 }
 
 /// Generate a TOTP code and remaining seconds for the current time window.
+/// `digits` defaults to 6, `period` defaults to 30 (per RFC 6238).
 pub fn generate_totp(
     secret: &str,
     timestamp: u64,
     algorithm: TotpAlgorithm,
 ) -> Result<(String, u8), TotpError> {
+    generate_totp_with_params(secret, timestamp, algorithm, 6, 30)
+}
+
+/// Generate a TOTP code with explicit digits and period, useful for non-RFC
+/// defaults declared via `otpauth://...?digits=8&period=60`.
+pub fn generate_totp_with_params(
+    secret: &str,
+    timestamp: u64,
+    algorithm: TotpAlgorithm,
+    digits: u32,
+    period: u64,
+) -> Result<(String, u8), TotpError> {
+    if digits == 0 || digits > 10 {
+        return Err(TotpError::UnsupportedAlgorithm(format!(
+            "unsupported digits: {}",
+            digits
+        )));
+    }
+    if period == 0 {
+        return Err(TotpError::UnsupportedAlgorithm("period must be > 0".into()));
+    }
     let secret_bytes = decode_base32(secret)?;
-    let time_step = 30u64;
-    let counter = timestamp / time_step;
-    let remaining = (time_step - (timestamp % time_step)) as u8;
-    let code = hotp(&secret_bytes, counter, algorithm);
-    Ok((format!("{:06}", code), remaining))
+    let counter = timestamp / period;
+    let remaining = (period - (timestamp % period)) as u8;
+    let code = hotp(&secret_bytes, counter, algorithm, digits);
+    Ok((format!("{:0width$}", code, width = digits as usize), remaining))
 }
 
 /// Verify a user-supplied TOTP code with ±1 window tolerance.
@@ -77,16 +100,34 @@ pub fn verify_totp(
     code: &str,
     algorithm: TotpAlgorithm,
 ) -> Result<bool, TotpError> {
+    verify_totp_with_params(secret, timestamp, code, algorithm, 6, 30)
+}
+
+/// Verify with explicit digits/period. Length must match the supplied code.
+pub fn verify_totp_with_params(
+    secret: &str,
+    timestamp: u64,
+    code: &str,
+    algorithm: TotpAlgorithm,
+    digits: u32,
+    period: u64,
+) -> Result<bool, TotpError> {
     use subtle::ConstantTimeEq;
+    if digits == 0 || digits > 10 || period == 0 {
+        return Err(TotpError::UnsupportedAlgorithm("invalid TOTP params".into()));
+    }
     let secret_bytes = decode_base32(secret)?;
-    let time_step = 30u64;
-    let counter = timestamp / time_step;
+    let counter = timestamp / period;
     let code_bytes = code.as_bytes();
+    if code_bytes.len() != digits as usize {
+        return Ok(false);
+    }
     for window in -1i64..=1i64 {
         let test_counter = ((counter as i64) + window) as u64;
-        let expected = format!("{:06}", hotp(&secret_bytes, test_counter, algorithm));
+        let expected_code = hotp(&secret_bytes, test_counter, algorithm, digits);
+        let expected = format!("{:0width$}", expected_code, width = digits as usize);
         let expected_bytes = expected.as_bytes();
-        if expected_bytes.len() == code_bytes.len() && expected_bytes.ct_eq(code_bytes).into() {
+        if expected_bytes.ct_eq(code_bytes).into() {
             return Ok(true);
         }
     }
@@ -174,7 +215,7 @@ mod tests {
     #[test]
     fn test_hotp_sha1() {
         let secret = decode_base32("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").unwrap();
-        let code = hotp(&secret, 1, TotpAlgorithm::Sha1);
+        let code = hotp(&secret, 1, TotpAlgorithm::Sha1, 6);
         // HOTP with this secret and counter=1 produces a 6-digit code
         assert!(code < 1_000_000);
     }
@@ -276,6 +317,38 @@ mod extra_tests {
             .unwrap()
             .as_secs();
         assert!(verify_totp(secret, now, &code, TotpAlgorithm::Sha1).unwrap());
+    }
+
+    #[test]
+    fn test_totp_8_digits() {
+        // otpauth://...?digits=8 should produce 8-character codes.
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        let (code, _) =
+            generate_totp_with_params(secret, 59, TotpAlgorithm::Sha1, 8, 30).unwrap();
+        assert_eq!(code.len(), 8);
+        // verify must accept the same length
+        assert!(verify_totp_with_params(secret, 59, &code, TotpAlgorithm::Sha1, 8, 30).unwrap());
+        // and must reject a 6-digit code at the same instant
+        assert!(!verify_totp_with_params(secret, 59, "287082", TotpAlgorithm::Sha1, 8, 30).unwrap());
+    }
+
+    #[test]
+    fn test_totp_period_60() {
+        // otpauth://...?period=60 doubles the time step.
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        let (code_30, _) = generate_totp_with_params(secret, 60, TotpAlgorithm::Sha1, 6, 30).unwrap();
+        // At t=60 the period-30 counter is 2; the period-60 counter is 1.
+        // The codes must therefore differ (different counter → different code).
+        let (code_60, _) = generate_totp_with_params(secret, 60, TotpAlgorithm::Sha1, 6, 60).unwrap();
+        assert_ne!(code_30, code_60);
+    }
+
+    #[test]
+    fn test_totp_invalid_params() {
+        let secret = "JBSWY3DPEHPK3PXP";
+        assert!(generate_totp_with_params(secret, 0, TotpAlgorithm::Sha1, 0, 30).is_err());
+        assert!(generate_totp_with_params(secret, 0, TotpAlgorithm::Sha1, 11, 30).is_err());
+        assert!(generate_totp_with_params(secret, 0, TotpAlgorithm::Sha1, 6, 0).is_err());
     }
 }
 

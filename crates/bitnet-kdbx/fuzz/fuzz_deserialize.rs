@@ -20,6 +20,8 @@ mod fuzz_tests {
             url: zeroize::Zeroizing::new("".to_string()),
             notes: zeroize::Zeroizing::new("".to_string()),
             totp_secret: None,
+            totp_digits: None,
+            totp_period: None,
         };
         let group = Group {
             uuid: [0u8; 16],

@@ -14,6 +14,13 @@
     <WindowsPackageType>None</WindowsPackageType>
     <EnableMsixTooling>false</EnableMsixTooling>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Skip PriGen step (unpackaged WinUI 3 app does not need .pri files) -->
+    <EnableDefaultPriItems>false</EnableDefaultPriItems>
+    <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
+    <AppxPackage>false</AppxPackage>
+    <EnableMrtResourceGeneration>false</EnableMrtResourceGeneration>
+    <EnableDefaultRdXmlItems>false</EnableDefaultRdXmlItems>
+    <EnableCoreMrtTooling>false</EnableCoreMrtTooling>
   </PropertyGroup>
 
   <ItemGroup>

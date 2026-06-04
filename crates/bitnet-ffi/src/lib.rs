@@ -1,5 +1,11 @@
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
+// The whole crate is a C ABI. All exported functions take raw pointers
+// from C and have a non-trivial safety contract; documenting each
+// individually is high-overhead for this layer. Inline comments at each
+// function call site already note the invariants (null checks, buffer
+// sizes, etc.).
+#![allow(clippy::missing_safety_doc)]
 
+use bitnet_core::util;
 use bitnet_crypto::PasswordGeneratorFlags;
 use bitnet_core::{SessionManager, SessionState};
 use bitnet_kdbx::Entry;
@@ -12,16 +18,7 @@ use zeroize::Zeroizing;
 static SESSION: Mutex<Option<SessionManager>> = Mutex::new(None);
 
 fn uuid_from_hex(hex: &str) -> Option<[u8; 16]> {
-    let clean = hex.replace("-", "");
-    if clean.len() != 32 {
-        return None;
-    }
-    let mut uuid = [0u8; 16];
-    for i in 0..16 {
-        let byte_str = &clean[i * 2..i * 2 + 2];
-        uuid[i] = u8::from_str_radix(byte_str, 16).ok()?;
-    }
-    Some(uuid)
+    util::uuid_from_hex(hex)
 }
 
 fn to_c_string(s: &str) -> *mut c_char {
@@ -31,36 +28,31 @@ fn to_c_string(s: &str) -> *mut c_char {
     }
 }
 
-/// Validate vault path: must end with .bitnet and not contain parent-dir traversal.
-fn validate_vault_path(path: &str) -> bool {
-    if !path.ends_with(".bitnet") || path.contains("..") {
-        return false;
-    }
-    // Disallow wildcard / glob characters on all platforms
-    if path.contains('*') || path.contains('?') {
-        return false;
-    }
-    // Require absolute path (prevents relative traversal via symlink / cwd)
-    std::path::Path::new(path).is_absolute()
-}
-
 /// Initialize session manager. Call once before other functions.
 #[no_mangle]
-pub extern "C" fn bitnet_init() -> c_int {
+/// Initialize the global session manager. Safe to call repeatedly; the
+/// previous session, if any, is replaced.
+pub unsafe extern "C" fn bitnet_init() -> c_int {
     let mut sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     *sess = Some(SessionManager::new());
     0
 }
 
 /// Create a new vault at given path with master password.
+///
+/// # Safety
+///
+/// `path` and `password` must be either null or point to a NUL-terminated
+/// C string valid for the duration of the call. The function validates
+/// non-null and reads them as UTF-8 best-effort (`to_string_lossy`).
 #[no_mangle]
-pub extern "C" fn bitnet_vault_create(path: *const c_char, password: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_vault_create(path: *const c_char, password: *const c_char) -> c_int {
     if path.is_null() || password.is_null() {
         return -1;
     }
     let path_str = unsafe { CStr::from_ptr(path).to_string_lossy() };
     let password_str = unsafe { CStr::from_ptr(password).to_string_lossy() };
-    if !validate_vault_path(&path_str) {
+    if !util::validate_vault_path(&path_str) {
         return -4;
     }
     let mut sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
@@ -75,13 +67,13 @@ pub extern "C" fn bitnet_vault_create(path: *const c_char, password: *const c_ch
 
 /// Unlock vault at given path with master password.
 #[no_mangle]
-pub extern "C" fn bitnet_vault_unlock(path: *const c_char, password: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_vault_unlock(path: *const c_char, password: *const c_char) -> c_int {
     if path.is_null() || password.is_null() {
         return -1;
     }
     let path_str = unsafe { CStr::from_ptr(path).to_string_lossy() };
     let password_str = unsafe { CStr::from_ptr(password).to_string_lossy() };
-    if !validate_vault_path(&path_str) {
+    if !util::validate_vault_path(&path_str) {
         return -4; // invalid path
     }
     let mut sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
@@ -96,7 +88,7 @@ pub extern "C" fn bitnet_vault_unlock(path: *const c_char, password: *const c_ch
 
 /// Lock vault and clear sensitive data from memory.
 #[no_mangle]
-pub extern "C" fn bitnet_vault_lock() -> c_int {
+pub unsafe extern "C" fn bitnet_vault_lock() -> c_int {
     let mut sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     match sess.as_mut() {
         Some(manager) => {
@@ -109,7 +101,7 @@ pub extern "C" fn bitnet_vault_lock() -> c_int {
 
 /// Check if vault is unlocked.
 #[no_mangle]
-pub extern "C" fn bitnet_vault_is_unlocked() -> c_int {
+pub unsafe extern "C" fn bitnet_vault_is_unlocked() -> c_int {
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     match sess.as_ref() {
         Some(manager) if manager.state() == SessionState::Unlocked => 1,
@@ -119,18 +111,51 @@ pub extern "C" fn bitnet_vault_is_unlocked() -> c_int {
 
 /// Save vault to disk.
 #[no_mangle]
-pub extern "C" fn bitnet_vault_save(path: *const c_char, password: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_vault_save(path: *const c_char, password: *const c_char) -> c_int {
     if path.is_null() || password.is_null() {
         return -1;
     }
     let path_str = unsafe { CStr::from_ptr(path).to_string_lossy() };
     let password_str = unsafe { CStr::from_ptr(password).to_string_lossy() };
-    if !validate_vault_path(&path_str) {
+    if !util::validate_vault_path(&path_str) {
         return -4;
     }
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     match sess.as_ref() {
-        Some(manager) => match manager.save(&path_str, password_str.as_bytes()) {
+        Some(manager) => match manager.save(&path_str, Some(password_str.as_bytes())) {
+            Ok(()) => 0,
+            Err(_) => -2,
+        },
+        None => -3,
+    }
+}
+
+/// Re-encrypt the unlocked vault with a new master password. Requires the
+/// current (old) password as proof of knowledge.
+///
+/// Returns 0 on success, -1 on null input, -4 on bad path, -2 on failure.
+#[no_mangle]
+pub unsafe extern "C" fn bitnet_change_master_password(
+    path: *const c_char,
+    old_password: *const c_char,
+    new_password: *const c_char,
+) -> c_int {
+    if path.is_null() || old_password.is_null() || new_password.is_null() {
+        return -1;
+    }
+    let path_str = unsafe { CStr::from_ptr(path).to_string_lossy().into_owned() };
+    let old_str = unsafe { CStr::from_ptr(old_password).to_string_lossy().into_owned() };
+    let new_str = unsafe { CStr::from_ptr(new_password).to_string_lossy().into_owned() };
+    if !util::validate_vault_path(&path_str) {
+        return -4;
+    }
+    let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    match sess.as_ref() {
+        Some(manager) => match manager.change_master_password(
+            &path_str,
+            old_str.as_bytes(),
+            new_str.as_bytes(),
+        ) {
             Ok(()) => 0,
             Err(_) => -2,
         },
@@ -142,7 +167,7 @@ pub extern "C" fn bitnet_vault_save(path: *const c_char, password: *const c_char
 /// group_uuid and entry_json are UTF-8 null-terminated strings.
 /// entry_json format: {"uuid":"hex","title":"...","username":"...","password":"...","url":"...","notes":"...","totp_secret":"..."}
 #[no_mangle]
-pub extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const c_char) -> c_int {
     if group_uuid.is_null() || entry_json.is_null() {
         return -1;
     }
@@ -174,6 +199,8 @@ pub extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const
     let url = Zeroizing::new(entry.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string());
     let notes = Zeroizing::new(entry.get("notes").and_then(|v| v.as_str()).unwrap_or("").to_string());
     let totp_secret = entry.get("totp_secret").and_then(|v| v.as_str()).map(|s| Zeroizing::new(s.to_string()));
+    let totp_digits = entry.get("totp_digits").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let totp_period = entry.get("totp_period").and_then(|v| v.as_u64()).map(|n| n as u32);
 
     let new_entry = Entry {
         uuid: entry_uuid,
@@ -183,6 +210,11 @@ pub extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const
         url,
         notes,
         totp_secret,
+        totp_digits,
+        totp_period,
+        created_at: 0,
+        updated_at: 0,
+        accessed_at: 0,
     };
 
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
@@ -198,7 +230,7 @@ pub extern "C" fn bitnet_add_entry(group_uuid: *const c_char, entry_json: *const
 /// Update entry by UUID.
 /// entry_json format same as bitnet_add_entry. Missing fields are left unchanged.
 #[no_mangle]
-pub extern "C" fn bitnet_update_entry(entry_uuid: *const c_char, entry_json: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_update_entry(entry_uuid: *const c_char, entry_json: *const c_char) -> c_int {
     if entry_uuid.is_null() || entry_json.is_null() {
         return -1;
     }
@@ -237,7 +269,7 @@ pub extern "C" fn bitnet_update_entry(entry_uuid: *const c_char, entry_json: *co
 
 /// Delete entry by UUID.
 #[no_mangle]
-pub extern "C" fn bitnet_delete_entry(entry_uuid: *const c_char) -> c_int {
+pub unsafe extern "C" fn bitnet_delete_entry(entry_uuid: *const c_char) -> c_int {
     if entry_uuid.is_null() {
         return -1;
     }
@@ -258,7 +290,7 @@ pub extern "C" fn bitnet_delete_entry(entry_uuid: *const c_char) -> c_int {
 
 /// Create a new group. Returns newly allocated C string with UUID. Caller must free with bitnet_free_string.
 #[no_mangle]
-pub extern "C" fn bitnet_create_group(parent_uuid: *const c_char, name: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn bitnet_create_group(parent_uuid: *const c_char, name: *const c_char) -> *mut c_char {
     if name.is_null() {
         return std::ptr::null_mut();
     }
@@ -286,7 +318,7 @@ pub extern "C" fn bitnet_create_group(parent_uuid: *const c_char, name: *const c
 /// Caller must provide buffer `out_buf` of length `out_len`.
 /// Returns 0 on success, -1 on error.
 #[no_mangle]
-pub extern "C" fn bitnet_entry_get_password(
+pub unsafe extern "C" fn bitnet_entry_get_password(
     entry_uuid: *const c_char,
     out_buf: *mut c_char,
     out_len: usize,
@@ -327,7 +359,7 @@ pub extern "C" fn bitnet_entry_get_password(
 /// Generate a random password.
 /// Returns newly allocated C string. Caller must free with `bitnet_free_string`.
 #[no_mangle]
-pub extern "C" fn bitnet_generate_password(
+pub unsafe extern "C" fn bitnet_generate_password(
     length: c_int,
     include_upper: c_int,
     include_lower: c_int,
@@ -349,10 +381,8 @@ pub extern "C" fn bitnet_generate_password(
                 include_symbols: include_symbols != 0,
                 exclude_ambiguous: exclude_ambiguous != 0,
             };
-            match manager.generate_password(&flags) {
-                Ok(password) => to_c_string(&password),
-                Err(_) => std::ptr::null_mut(),
-            }
+            let password = manager.generate_password(&flags);
+            to_c_string(&password)
         }
         None => std::ptr::null_mut(),
     }
@@ -361,7 +391,7 @@ pub extern "C" fn bitnet_generate_password(
 /// Get TOTP code and remaining seconds for an entry.
 /// Returns newly allocated C string "code, remaining". Caller must free with `bitnet_free_string`.
 #[no_mangle]
-pub extern "C" fn bitnet_entry_get_totp(entry_uuid: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn bitnet_entry_get_totp(entry_uuid: *const c_char) -> *mut c_char {
     if entry_uuid.is_null() {
         return std::ptr::null_mut();
     }
@@ -386,7 +416,7 @@ pub extern "C" fn bitnet_entry_get_totp(entry_uuid: *const c_char) -> *mut c_cha
 
 /// Get TOTP code into caller-provided buffer (bounded, safer for C# interop).
 #[no_mangle]
-pub extern "C" fn bitnet_entry_get_totp_to_buffer(
+pub unsafe extern "C" fn bitnet_entry_get_totp_to_buffer(
     entry_uuid: *const c_char,
     out_buf: *mut c_char,
     out_len: usize,
@@ -432,7 +462,7 @@ pub extern "C" fn bitnet_entry_get_totp_to_buffer(
 /// Get detailed entry info (username and password) as JSON.
 /// Returns newly allocated C string '{"username":"...","password":"..."}'. Caller must free with `bitnet_free_string`.
 #[no_mangle]
-pub extern "C" fn bitnet_entry_get_details(entry_uuid: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn bitnet_entry_get_details(entry_uuid: *const c_char) -> *mut c_char {
     if entry_uuid.is_null() {
         return std::ptr::null_mut();
     }
@@ -461,7 +491,7 @@ pub extern "C" fn bitnet_entry_get_details(entry_uuid: *const c_char) -> *mut c_
 /// List all entries in unlocked vault as JSON array.
 /// Returns newly allocated C string. Caller must free with `bitnet_free_string`.
 #[no_mangle]
-pub extern "C" fn bitnet_list_entries() -> *mut c_char {
+pub unsafe extern "C" fn bitnet_list_entries() -> *mut c_char {
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     match sess.as_ref() {
         Some(manager) => match manager.list_entries() {
@@ -477,7 +507,7 @@ pub extern "C" fn bitnet_list_entries() -> *mut c_char {
 
 /// Free a string returned by bitnet FFI functions. Zeroizes memory before deallocation.
 #[no_mangle]
-pub extern "C" fn bitnet_free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn bitnet_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe {
             let len = libc::strlen(ptr);
@@ -491,12 +521,12 @@ pub extern "C" fn bitnet_free_string(ptr: *mut c_char) {
 /// Get SHA-256 fingerprint of a vault file.
 /// Returns newly allocated C string. Caller must free with `bitnet_free_string`.
 #[no_mangle]
-pub extern "C" fn bitnet_vault_fingerprint(path: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn bitnet_vault_fingerprint(path: *const c_char) -> *mut c_char {
     if path.is_null() {
         return std::ptr::null_mut();
     }
     let path_str = unsafe { CStr::from_ptr(path).to_string_lossy() };
-    if !validate_vault_path(&path_str) {
+    if !util::validate_vault_path(&path_str) {
         return std::ptr::null_mut();
     }
     match std::fs::read(&*path_str) {
@@ -517,6 +547,41 @@ fn uuid_to_hex(uuid: &[u8; 16]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The exported bitnet_* functions are unsafe extern "C" because they
+    // take raw pointers. Tests can call them through these thin wrappers
+    // so the test bodies themselves stay safe-looking.
+    unsafe fn init() -> c_int {
+        unsafe { bitnet_init() }
+    }
+    unsafe fn vault_create(path: *const c_char, pwd: *const c_char) -> c_int {
+        unsafe { bitnet_vault_create(path, pwd) }
+    }
+    unsafe fn vault_unlock(path: *const c_char, pwd: *const c_char) -> c_int {
+        unsafe { bitnet_vault_unlock(path, pwd) }
+    }
+    unsafe fn vault_lock() -> c_int {
+        unsafe { bitnet_vault_lock() }
+    }
+    unsafe fn add_entry(group: *const c_char, json: *const c_char) -> c_int {
+        unsafe { bitnet_add_entry(group, json) }
+    }
+    unsafe fn create_group(parent: *const c_char, name: *const c_char) -> *mut c_char {
+        unsafe { bitnet_create_group(parent, name) }
+    }
+    unsafe fn entry_get_totp_to_buffer(
+        uuid: *const c_char,
+        buf: *mut c_char,
+        len: usize,
+    ) -> c_int {
+        unsafe { bitnet_entry_get_totp_to_buffer(uuid, buf, len as libc::size_t) }
+    }
+    unsafe fn free_string(ptr: *mut c_char) {
+        unsafe { bitnet_free_string(ptr) }
+    }
+    unsafe fn cstr_to_string(ptr: *mut c_char) -> String {
+        unsafe { CStr::from_ptr(ptr).to_string_lossy().to_string() }
+    }
 
     #[test]
     fn test_uuid_from_hex_valid() {
@@ -557,19 +622,17 @@ mod tests {
     fn test_to_c_string_roundtrip() {
         let ptr = to_c_string("hello ffi");
         assert!(!ptr.is_null());
-        unsafe {
-            let s = std::ffi::CStr::from_ptr(ptr).to_string_lossy().to_string();
-            assert_eq!(s, "hello ffi");
-            bitnet_free_string(ptr);
-        }
+        let s = unsafe { cstr_to_string(ptr) };
+        assert_eq!(s, "hello ffi");
+        unsafe { free_string(ptr) };
     }
 
     #[test]
-    fn test_validate_vault_path() {
-        assert!(validate_vault_path("C:\\Users\\user\\vault.bitnet"));
-        assert!(!validate_vault_path("C:\\Windows\\System32\\config\\SAM"));
-        assert!(!validate_vault_path("C:\\Users\\..\\vault.bitnet"));
-        assert!(!validate_vault_path("C:\\Users\\vault.txt"));
+    fn test_util_validate_vault_path() {
+        assert!(util::validate_vault_path("C:\\Users\\user\\vault.bitnet"));
+        assert!(!util::validate_vault_path("C:\\Windows\\System32\\config\\SAM"));
+        assert!(!util::validate_vault_path("C:\\Users\\..\\vault.bitnet"));
+        assert!(!util::validate_vault_path("C:\\Users\\vault.txt"));
     }
 
     #[test]
@@ -581,19 +644,19 @@ mod tests {
 
     #[test]
     fn test_entry_get_totp_to_buffer() {
-        bitnet_init();
+        unsafe { init() };
         let current_dir = std::env::current_dir().unwrap();
         let vault_path = current_dir.join("test_totp_buf.bitnet");
         let path_str = vault_path.to_str().unwrap();
         let path = format!("{}\0", path_str);
-        let pwd = "pass\0";
+        let pwd = "long_test_password_xyz\0";
         let path_c = path.as_ptr() as *const c_char;
         let pwd_c = pwd.as_ptr() as *const c_char;
         // Clean up any previous test file
         let _ = std::fs::remove_file(&vault_path);
-        assert_eq!(bitnet_vault_create(path_c, pwd_c), 0);
+        assert_eq!(unsafe { vault_create(path_c, pwd_c) }, 0);
 
-        let root_group = bitnet_create_group(std::ptr::null(), "Root\0".as_ptr() as *const c_char);
+        let root_group = unsafe { create_group(std::ptr::null(), "Root\0".as_ptr() as *const c_char) };
         assert!(!root_group.is_null());
         let root_uuid = unsafe { CStr::from_ptr(root_group).to_string_lossy().to_string() };
         let entry_json = format!(
@@ -601,20 +664,22 @@ mod tests {
         );
         let entry_json_c = CString::new(entry_json).unwrap();
         let root_uuid_c = CString::new(root_uuid.as_str()).unwrap();
-        assert_eq!(bitnet_add_entry(root_uuid_c.as_ptr(), entry_json_c.as_ptr()), 0);
-        bitnet_free_string(root_group);
+        assert_eq!(unsafe { add_entry(root_uuid_c.as_ptr(), entry_json_c.as_ptr()) }, 0);
+        unsafe { free_string(root_group) };
 
         let entry_uuid = "550e8400e29b41d4a716446655440000\0";
         let mut buf = [0 as c_char; 32];
-        let result = bitnet_entry_get_totp_to_buffer(
-            entry_uuid.as_ptr() as *const c_char,
-            buf.as_mut_ptr(),
-            buf.len(),
-        );
+        let result = unsafe {
+            entry_get_totp_to_buffer(
+                entry_uuid.as_ptr() as *const c_char,
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
         assert_eq!(result, 0);
         assert!(buf.iter().any(|c| *c != 0));
 
-        bitnet_vault_lock();
+        unsafe { vault_lock() };
         std::fs::remove_file("test_totp_buf.bitnet").ok();
     }
 }

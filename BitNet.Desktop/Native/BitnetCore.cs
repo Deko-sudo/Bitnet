@@ -68,9 +68,8 @@ namespace BitNet.Desktop.Native
         [DllImport(DllName)]
         public static extern IntPtr bitnet_generate_password(int length, int upper, int lower, int digits, int symbols, int ambiguous);
 
-        [DllImport(DllName)]
-        [return: MarshalAs(UnmanagedType.I4)]
-        public static extern int bitnet_free_string(IntPtr ptr);
+        [DllImport(DllName, EntryPoint = "bitnet_free_string")]
+        public static extern void bitnet_free_string(IntPtr ptr);
 
         [DllImport(DllName)]
         [return: MarshalAs(UnmanagedType.I4)]
@@ -95,6 +94,28 @@ namespace BitNet.Desktop.Native
             }
         }
 
+        /// <summary>
+        /// Convert a managed string into a SecureString so that the cleartext
+        /// password is no longer reachable as an immutable System.String.
+        /// Note: the caller still owns the original string and is responsible
+        /// for any in-place zeroization of it (managed strings are immutable
+        /// so this is best-effort — pin and zero via the returned SecureString
+        /// when full control is required).
+        /// </summary>
+        public static System.Security.SecureString ToSecureString(string value)
+        {
+            var ss = new System.Security.SecureString();
+            if (value != null)
+            {
+                foreach (char c in value)
+                {
+                    ss.AppendChar(c);
+                }
+            }
+            ss.MakeReadOnly();
+            return ss;
+        }
+
         public static int SecureVaultUnlock(string path, string password)
         {
             IntPtr pPath = Utf8ToPinnedPointer(path, out GCHandle hPath, out byte[] bPath);
@@ -106,6 +127,72 @@ namespace BitNet.Desktop.Native
             finally
             {
                 ZeroizeAndFree(ref hPwd, bPwd);
+                ZeroizeAndFree(ref hPath, bPath);
+            }
+        }
+
+        /// <summary>
+        /// SecureString-aware variant: the password is read directly from the
+        /// unmanaged BSTR (no managed String allocation), and the BSTR is
+        /// zeroized before the handle is released. Use this in place of
+        /// SecureVaultUnlock when the caller holds the password in a
+        /// SecureString (e.g. after Windows Hello / PasswordVault retrieval).
+        /// </summary>
+        public static int SecureVaultUnlockSecure(string path, System.Security.SecureString password)
+        {
+            if (password == null) throw new ArgumentNullException(nameof(password));
+            IntPtr pPath = Utf8ToPinnedPointer(path, out GCHandle hPath, out byte[] bPath);
+            IntPtr pPwd = IntPtr.Zero;
+            try
+            {
+                pPwd = Marshal.SecureStringToBSTR(password);
+                return bitnet_vault_unlock_raw(pPath, pPwd);
+            }
+            finally
+            {
+                if (pPwd != IntPtr.Zero)
+                {
+                    // ZeroFreeBSTR overwrites the BSTR buffer with zeros before
+                    // freeing, so the password does not linger in unmanaged
+                    // memory after this call.
+                    Marshal.ZeroFreeBSTR(pPwd);
+                }
+                ZeroizeAndFree(ref hPath, bPath);
+            }
+        }
+
+        /// <summary>SecureString variant of SecureVaultCreate.</summary>
+        public static int SecureVaultCreateSecure(string path, System.Security.SecureString password)
+        {
+            if (password == null) throw new ArgumentNullException(nameof(password));
+            IntPtr pPath = Utf8ToPinnedPointer(path, out GCHandle hPath, out byte[] bPath);
+            IntPtr pPwd = IntPtr.Zero;
+            try
+            {
+                pPwd = Marshal.SecureStringToBSTR(password);
+                return bitnet_vault_create_raw(pPath, pPwd);
+            }
+            finally
+            {
+                if (pPwd != IntPtr.Zero) Marshal.ZeroFreeBSTR(pPwd);
+                ZeroizeAndFree(ref hPath, bPath);
+            }
+        }
+
+        /// <summary>SecureString variant of SecureVaultSave.</summary>
+        public static int SecureVaultSaveSecure(string path, System.Security.SecureString password)
+        {
+            if (password == null) throw new ArgumentNullException(nameof(password));
+            IntPtr pPath = Utf8ToPinnedPointer(path, out GCHandle hPath, out byte[] bPath);
+            IntPtr pPwd = IntPtr.Zero;
+            try
+            {
+                pPwd = Marshal.SecureStringToBSTR(password);
+                return bitnet_vault_save_raw(pPath, pPwd);
+            }
+            finally
+            {
+                if (pPwd != IntPtr.Zero) Marshal.ZeroFreeBSTR(pPwd);
                 ZeroizeAndFree(ref hPath, bPath);
             }
         }

@@ -1,8 +1,7 @@
-﻿use serde::{Deserialize, Serialize};
+use bitnet_native_host::RateLimiter;
+use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::io::{self, Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -17,36 +16,11 @@ struct Response {
     error: Option<String>,
 }
 
-/// Simple sliding-window rate limiter: max N messages per second.
-struct RateLimiter {
-    window_start: AtomicU64, // epoch millis / 1000 = seconds
-    count: AtomicU64,
-    max_per_sec: u64,
-}
-
-impl RateLimiter {
-    fn new(max_per_sec: u64) -> Self {
-        Self {
-            window_start: AtomicU64::new(0),
-            count: AtomicU64::new(0),
-            max_per_sec,
-        }
-    }
-
-    fn check(&self) -> bool {
-        let now_sec = Instant::now().elapsed().as_secs();
-        let stored = self.window_start.load(Ordering::Relaxed);
-        if now_sec != stored {
-            self.window_start.store(now_sec, Ordering::Relaxed);
-            self.count.store(1, Ordering::Relaxed);
-            return true;
-        }
-        let current = self.count.fetch_add(1, Ordering::Relaxed);
-        current < self.max_per_sec
-    }
-}
-
 fn main() {
+    // The whole body is unsafe because every call to bitnet_ffi::bitnet_*
+    // takes a raw pointer and is marked unsafe extern "C". Wrapping the
+    // body in a single unsafe block keeps the action-handler code readable.
+    unsafe {
     bitnet_ffi::bitnet_init();
     let rate_limiter = RateLimiter::new(100); // 100 msg/s
 
@@ -103,7 +77,7 @@ fn main() {
                     if ptr.is_null() {
                         let _ = send_response(false, None, Some("Failed to get entry details".into()));
                     } else {
-                        let json = unsafe {
+                        let json = {
                             std::ffi::CStr::from_ptr(ptr)
                                 .to_string_lossy()
                                 .to_string()
@@ -132,7 +106,7 @@ fn main() {
                     );
                     match result {
                         0 => {
-                            let pwd = unsafe {
+                            let pwd = {
                                 std::ffi::CStr::from_ptr(buf.as_ptr())
                                     .to_string_lossy()
                                     .to_string()
@@ -155,7 +129,7 @@ fn main() {
                 if ptr.is_null() {
                     let _ = send_response(false, None, Some("Failed to list entries".into()));
                 } else {
-                    let json = unsafe {
+                    let json = {
                         std::ffi::CStr::from_ptr(ptr)
                             .to_string_lossy()
                             .to_string()
@@ -169,6 +143,7 @@ fn main() {
             }
         }
     }
+    } // end unsafe
 }
 
 fn send_response(success: bool, data: Option<String>, error: Option<String>) -> io::Result<()> {

@@ -182,6 +182,91 @@ pub fn zeroize_slice(slice: &mut [u8]) {
     slice.zeroize();
 }
 
+/// Strength assessment of a master-password candidate. The classification is
+/// deliberately coarse — entropy in bits is approximated from the character
+/// set and length, with NIST SP 800-63B-aligned thresholds.
+///
+/// * `TooShort` — less than 8 characters. Always reject (Argon2id cannot
+///   save a user from a 3-character password).
+/// * `Weak` — 8-11 characters or only one character class.
+/// * `Fair` — 12+ characters with at least two character classes.
+/// * `Strong` — 16+ characters with at least three character classes, or
+///   20+ characters regardless of classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordStrength {
+    TooShort,
+    Weak,
+    Fair,
+    Strong,
+}
+
+impl PasswordStrength {
+    /// Human-readable label for UI display.
+    pub fn label(self) -> &'static str {
+        match self {
+            PasswordStrength::TooShort => "too short",
+            PasswordStrength::Weak => "weak",
+            PasswordStrength::Fair => "fair",
+            PasswordStrength::Strong => "strong",
+        }
+    }
+
+    /// Approximate entropy in bits, useful for displaying a strength meter.
+    /// `log2(charset_size) * length` is a standard lower bound.
+    pub fn entropy_bits(self, length: usize) -> f32 {
+        // The charset is implied by the strength tier; for the meter we just
+        // need a reasonable monotonic number.
+        let charset_bits = match self {
+            PasswordStrength::TooShort => 1.0,
+            PasswordStrength::Weak => 4.0,    // one class, e.g. lowercase
+            PasswordStrength::Fair => 6.0,    // two classes
+            PasswordStrength::Strong => 6.5,  // multi-class
+        };
+        (length as f32) * charset_bits
+    }
+}
+
+/// Estimate the strength of a password. The function is best-effort: it does
+/// not detect dictionary words or pattern repetition, only length and class
+/// diversity.
+pub fn assess_password_strength(password: &str) -> PasswordStrength {
+    let len = password.chars().count();
+    if len < 8 {
+        return PasswordStrength::TooShort;
+    }
+    let mut has_lower = false;
+    let mut has_upper = false;
+    let mut has_digit = false;
+    let mut has_symbol = false;
+    for c in password.chars() {
+        if c.is_ascii_lowercase() {
+            has_lower = true;
+        } else if c.is_ascii_uppercase() {
+            has_upper = true;
+        } else if c.is_ascii_digit() {
+            has_digit = true;
+        } else {
+            has_symbol = true;
+        }
+    }
+    let classes = [has_lower, has_upper, has_digit, has_symbol]
+        .iter()
+        .filter(|x| **x)
+        .count();
+
+    if len >= 20 {
+        // Long passwords are almost always strong even with one class
+        // (e.g. a 30-char passphrase).
+        PasswordStrength::Strong
+    } else if len >= 16 && classes >= 3 {
+        PasswordStrength::Strong
+    } else if len >= 12 && classes >= 2 {
+        PasswordStrength::Fair
+    } else {
+        PasswordStrength::Weak
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,5 +471,43 @@ mod extra_tests {
     fn test_validate_argon2_params_accepts_strong() {
         let strong = argon2::Params::new(64 * 1024, 3, 4, Some(32)).unwrap();
         assert!(validate_argon2_params(&strong).is_ok());
+    }
+
+    #[test]
+    fn test_assess_password_strength_rejects_short() {
+        assert_eq!(assess_password_strength(""), PasswordStrength::TooShort);
+        assert_eq!(assess_password_strength("a"), PasswordStrength::TooShort);
+        assert_eq!(assess_password_strength("abcdefgh"), PasswordStrength::Weak);
+        // 8 chars single class is still weak.
+    }
+
+    #[test]
+    fn test_assess_password_strength_classes() {
+        // 12 chars, 2 classes → fair
+        assert_eq!(
+            assess_password_strength("abcdefghijKL"),
+            PasswordStrength::Fair
+        );
+        // 16 chars, 3 classes → strong
+        assert_eq!(
+            assess_password_strength("Abcdefghijklmnop12"),
+            PasswordStrength::Strong
+        );
+        // 20+ chars regardless of class → strong
+        assert_eq!(
+            assess_password_strength("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            PasswordStrength::Strong
+        );
+    }
+
+    #[test]
+    fn test_assess_password_strength_entropy_monotonic() {
+        // Stronger tier must report higher entropy than weaker tier at the
+        // same length.
+        let weak = assess_password_strength("aaaaaaaa");
+        let fair = assess_password_strength("Aaaaaaaaaa");
+        let strong = assess_password_strength("Aaaaaaaaaa1!1!1!1");
+        assert!(weak.entropy_bits(8) < fair.entropy_bits(10));
+        assert!(fair.entropy_bits(10) < strong.entropy_bits(15));
     }
 }

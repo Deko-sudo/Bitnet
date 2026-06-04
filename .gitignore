@@ -46,4 +46,6 @@ BitNet.Wpf/
 BitNet.TestWindow/
 
 # Global configs (per-environment)
-global.json
+global.jsonplaywright-report/
+test-results/
+*.bat

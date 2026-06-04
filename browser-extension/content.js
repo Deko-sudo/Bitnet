@@ -37,8 +37,8 @@
     overlay.id = "bitnet-overlay";
     overlay.style.cssText = `
       position: fixed;
-      top: ${rect.bottom + window.scrollY + 4}px;
-      left: ${rect.left + window.scrollX}px;
+      top: ${rect.bottom + 4}px;
+      left: ${rect.left}px;
       background: white;
       border: 1px solid #ccc;
       border-radius: 6px;
@@ -118,6 +118,13 @@
   }
 
   function fillEntry(uuid, passwordField) {
+    // uuid is now a 32-char hex string (BitnetCore.cs serializes
+    // EntrySummary.uuid via the HexUuid serializer). The native host will
+    // route it through bitnet_entry_get_details which expects a hex uuid.
+    if (!/^[0-9a-f]{32}$/i.test(uuid)) {
+      console.error("BitNet: invalid uuid format", uuid);
+      return;
+    }
     browserAPI.runtime.sendMessage({ action: "get_entry", uuid: uuid }, (response) => {
       if (browserAPI.runtime.lastError || !response || !response.success) {
         console.error("BitNet fill failed:", browserAPI.runtime.lastError?.message || response?.error);
