@@ -41,7 +41,9 @@ jobs:
         shell: cmd
 
       - name: cargo deny check
-        run: cargo deny check
+        # Pinned version for reproducibility; latest may have stricter rules
+        # that trip the build on freshly-published yanked crates.
+        run: cargo install cargo-deny --locked --version 0.19.8 && cargo deny check
 
       - name: cargo build (release)
         run: cargo build --release --workspace
