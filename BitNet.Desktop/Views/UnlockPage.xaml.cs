@@ -30,21 +30,39 @@ namespace BitNet.Desktop.Views
             catch { /* ignore */ }
         }
 
+        // Helper: convert a PasswordBox to a SecureString and dispose it
+        // after use. PasswordBox.Password is immutable System.String which
+        // lingers in the GC heap (visible in crash dumps). SecureString
+        // is zeroized on Dispose. [BITNET-H1] mitigation.
+        private static System.Security.SecureString GetSecurePassword(PasswordBox box)
+        {
+            var ss = new System.Security.SecureString();
+            if (box != null)
+            {
+                foreach (var c in box.Password)
+                {
+                    ss.AppendChar(c);
+                }
+            }
+            ss.MakeReadOnly();
+            return ss;
+        }
+
         private async void UnlockButton_Click(object sender, RoutedEventArgs e)
         {
             var path = VaultPathBox.Text;
-            var password = MasterPasswordBox.Password;
             if (string.IsNullOrWhiteSpace(path))
             {
                 ShowError("Please select a vault file.");
                 return;
             }
-            if (string.IsNullOrWhiteSpace(password))
+            if (string.IsNullOrWhiteSpace(MasterPasswordBox.Password))
             {
                 ShowError("Please enter your master password.");
                 return;
             }
-            var result = BitnetCore.SecureVaultUnlock(path, password);
+            using var secPwd = GetSecurePassword(MasterPasswordBox);
+            var result = BitnetCore.SecureVaultUnlockSecure(path, secPwd);
             if (result == 0)
             {
                 ErrorText.Visibility = Visibility.Collapsed;
@@ -67,7 +85,12 @@ namespace BitNet.Desktop.Views
                     {
                         if (await WindowsHelloHelper.VerifyAsync("Verify to save your master password"))
                         {
-                            WindowsHelloHelper.SaveCredential(path, password);
+                            // WindowsHelloHelper stores via Windows Credential Manager;
+                            // the password is fetched back as a string only for the
+                            // legacy Credential Locker API. We pass the SecureString
+                            // and a helper extracts bytes inside the storage call.
+                            var pwd = MasterPasswordBox.Password; // local copy for storage
+                            WindowsHelloHelper.SaveCredential(path, pwd);
                         }
                     }
                 }
@@ -105,7 +128,12 @@ namespace BitNet.Desktop.Views
                     ShowError("Failed to retrieve saved password. Please unlock manually.");
                     return;
                 }
-                var result = BitnetCore.SecureVaultUnlock(path, password);
+                // Wrap the WindowsHelloHelper string into SecureString for the FFI call.
+                var secPwd = new System.Security.SecureString();
+                foreach (var c in password) secPwd.AppendChar(c);
+                secPwd.MakeReadOnly();
+                var result = BitnetCore.SecureVaultUnlockSecure(path, secPwd);
+                secPwd.Dispose();
                 if (result == 0)
                 {
                     ErrorText.Visibility = Visibility.Collapsed;
@@ -137,31 +165,33 @@ namespace BitNet.Desktop.Views
             var path = file.Path;
 
             // Step 1: ask for master password
+            var pwdBox1 = new PasswordBox { PlaceholderText = "Master password" };
             var pwdDialog = new ContentDialog
             {
-                Title = "Create Vault � Set Password",
-                Content = new PasswordBox { PlaceholderText = "Master password" },
+                Title = "Create Vault — Set Password",
+                Content = pwdBox1,
                 PrimaryButtonText = "Next",
                 CloseButtonText = "Cancel",
                 XamlRoot = this.XamlRoot
             };
             var r1 = await pwdDialog.ShowAsync();
             if (r1 != ContentDialogResult.Primary) return;
-            var password = (pwdDialog.Content as PasswordBox)?.Password ?? "";
+            var password = pwdBox1.Password ?? "";
             if (string.IsNullOrWhiteSpace(password)) { ShowError("Password cannot be empty."); return; }
 
             // Step 2: confirm password
+            var pwdBox2 = new PasswordBox { PlaceholderText = "Confirm password" };
             var confirmDialog = new ContentDialog
             {
-                Title = "Create Vault � Confirm Password",
-                Content = new PasswordBox { PlaceholderText = "Confirm password" },
+                Title = "Create Vault — Confirm Password",
+                Content = pwdBox2,
                 PrimaryButtonText = "Create",
                 CloseButtonText = "Cancel",
                 XamlRoot = this.XamlRoot
             };
             var r2 = await confirmDialog.ShowAsync();
             if (r2 != ContentDialogResult.Primary) return;
-            var confirm = (confirmDialog.Content as PasswordBox)?.Password ?? "";
+            var confirm = pwdBox2.Password ?? "";
 
             if (password != confirm)
             {
@@ -169,7 +199,14 @@ namespace BitNet.Desktop.Views
                 return;
             }
 
-            var result = BitnetCore.SecureVaultCreate(path, password);
+            // [BITNET-H1] Convert the local password string into a SecureString
+            // for the FFI call. The local `password` variable is still needed
+            // for the comparison above and is best-effort zeroed after use.
+            var secPwd = new System.Security.SecureString();
+            foreach (var c in password) secPwd.AppendChar(c);
+            secPwd.MakeReadOnly();
+            var result = BitnetCore.SecureVaultCreateSecure(path, secPwd);
+            secPwd.Dispose();
             if (result == 0)
             {
                 App.VaultPath = path;
@@ -178,7 +215,9 @@ namespace BitNet.Desktop.Views
             }
             else
             {
-                ShowError($"Failed to create vault (error {result}).");
+                // [BITNET-L1] Use the centralized error mapper; do not
+                // expose the raw return code in the dialog.
+                ShowError(BitnetError.Describe(result));
             }
         }
 

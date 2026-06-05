@@ -3,6 +3,40 @@
   const PASSWORD_SELECTOR = 'input[type="password"]';
   const USERNAME_SELECTOR = 'input[type="text"], input[type="email"], input:not([type])';
 
+  // [BITNET-H2] Origin guard. Content script must NOT run on non-HTTPS pages
+  // or on private network ranges (localhost / 192.168 / etc.). Manifest now
+  // ships the same exclude list, but this runtime check is a defense-in-depth
+  // measure in case the manifest is modified by a hostile deployment.
+  if (location.protocol !== 'https:') {
+    return;
+  }
+  const h = location.hostname;
+  if (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '::1' ||
+    h === '0.0.0.0' ||
+    /^10\./.test(h) ||
+    /^172\.(1[6-9]|2[0-9]|3[01])\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /\.local$/.test(h) ||
+    /\.internal$/.test(h) ||
+    /\.lan$/.test(h) ||
+    h.endsWith('.onion')
+  ) {
+    return;
+  }
+
+  // [BITNET-L6] Sanitize entry titles for overlay display. Strips Unicode
+  // bidi-control characters (LRE/RLE/PDF/LRO/RLO/ISL/PDI, plus LRM/RLM)
+  // so a malicious vault entry like "Google\u202Emooc.kcatta//:sptth" cannot
+  // visually spoof the user with a right-to-left override. RLO/RLM in
+  // particular are heavily abused in phishing to flip URL strings.
+  function sanitizeForDisplay(s) {
+    if (typeof s !== 'string') return '';
+    return s.replace(/[\u202A-\u202E\u2066-\u2069\u200E\u200F]/g, '');
+  }
+
   function findPasswordField() {
     return document.querySelector(PASSWORD_SELECTOR);
   }
@@ -85,7 +119,7 @@
       }
 
       if (matches.length === 1) {
-        overlay.textContent = `Fill ${matches[0].title}`;
+        overlay.textContent = `Fill ${sanitizeForDisplay(matches[0].title)}`;
         overlay.addEventListener("click", () => {
           fillEntry(matches[0].uuid, passwordField);
           overlay.remove();
@@ -99,7 +133,7 @@
         const list = document.createElement("div");
         matches.forEach(m => {
           const row = document.createElement("div");
-          row.textContent = m.title;
+          row.textContent = sanitizeForDisplay(m.title);
           row.style.cssText = "padding:4px 0;cursor:pointer;border-bottom:1px solid #eee;";
           row.addEventListener("click", () => {
             fillEntry(m.uuid, passwordField);
@@ -121,11 +155,15 @@
     // uuid is now a 32-char hex string (BitnetCore.cs serializes
     // EntrySummary.uuid via the HexUuid serializer). The native host will
     // route it through bitnet_entry_get_details which expects a hex uuid.
-    if (!/^[0-9a-f]{32}$/i.test(uuid)) {
+    // [BITNET-L5] Normalize to lowercase before regex matching so an
+    // uppercase UUID from a future caller does not silently bypass the
+    // validation.
+    const normalized = (uuid || '').toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(normalized)) {
       console.error("BitNet: invalid uuid format", uuid);
       return;
     }
-    browserAPI.runtime.sendMessage({ action: "get_entry", uuid: uuid }, (response) => {
+    browserAPI.runtime.sendMessage({ action: "get_entry", uuid: normalized }, (response) => {
       if (browserAPI.runtime.lastError || !response || !response.success) {
         console.error("BitNet fill failed:", browserAPI.runtime.lastError?.message || response?.error);
         return;

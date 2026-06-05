@@ -28,23 +28,74 @@ pub fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+/// Length bounds for a vault path. 7 covers the shortest absolute path
+/// (e.g. `C:\a.b`) but the typical minimum is `C:\x.bitnet` = 11 bytes.
+/// Upper bound 4096 matches Windows MAX_PATH for backward compatibility.
+const MIN_VAULT_PATH_LEN: usize = 7;
+const MAX_VAULT_PATH_LEN: usize = 4096;
+const REQUIRED_SUFFIX: &[u8; 7] = b".bitnet";
+
 /// Проверяет, что путь — абсолютный, имеет расширение `.bitnet`,
 /// не содержит parent-traversal и не ведёт в системные каталоги Windows.
+///
+/// Hardening (see [BITNET-H3] audit):
+/// 1. Length is checked first to prevent ridiculously long inputs from
+///    being fed into `String::contains` (which can be slow on long strings).
+/// 2. NTFS Alternate Data Streams (`file:stream`) are rejected — they bypass
+///    the `.bitnet` extension check on Windows because `Path::extension()`
+///    returns `None` for `vault.bitnet:$DATA`.
+/// 3. Wildcards (`*`, `?`) and reserved characters (`<`, `>`, `|`, NUL) are
+///    rejected so the path cannot be interpreted as a glob by the shell.
+/// 4. Windows protected directories are checked case-insensitively.
 pub fn validate_vault_path(path: &str) -> bool {
+    // 1. Length bounds (cheap reject, no heap allocation)
+    let bytes = path.as_bytes();
+    if bytes.len() < MIN_VAULT_PATH_LEN || bytes.len() > MAX_VAULT_PATH_LEN {
+        return false;
+    }
+
     let p = Path::new(path);
     if !p.is_absolute() {
         return false;
     }
-    if p.extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        != Some("bitnet".to_string())
-    {
+
+    // 2. Suffix check (case-insensitive, rejects `file:stream` because the
+    //    byte after `.bitnet` would have to be end-of-string, a NUL, or a
+    //    path separator for the suffix to match; ADS uses `:`).
+    if bytes.len() < REQUIRED_SUFFIX.len() {
         return false;
     }
+    let tail = &bytes[bytes.len() - REQUIRED_SUFFIX.len()..];
+    if !tail.eq_ignore_ascii_case(REQUIRED_SUFFIX) {
+        return false;
+    }
+    // Reject NTFS ADS, wildcards, control chars, and shell metachars in the
+    // whole path. We iterate bytes to keep this O(n) without heap allocation.
+    let mut colon_count = 0;
+    for &b in bytes {
+        match b {
+            // NUL
+            0 => return false,
+            // Control chars (0x01..=0x1F)
+            1..=0x1F => return false,
+            // NTFS stream separator (drive letter allowed, ADS rejected)
+            b':' => colon_count += 1,
+            // Wildcards and shell metachars
+            b'*' | b'?' | b'<' | b'>' | b'|' | b'"' => return false,
+            _ => {}
+        }
+    }
+    // More than one `:` indicates an NTFS ADS like `C:\file.bitnet:stream`.
+    if colon_count > 1 {
+        return false;
+    }
+
+    // 3. Parent-traversal check
     if path.contains("..") {
         return false;
     }
+
+    // 4. Windows protected directories
     #[cfg(windows)]
     {
         let lower = path.to_ascii_lowercase();
@@ -61,6 +112,7 @@ pub fn validate_vault_path(path: &str) -> bool {
             }
         }
     }
+
     true
 }
 
@@ -135,5 +187,43 @@ mod tests {
     fn validate_vault_path_rejects_relative() {
         assert!(!validate_vault_path("vault.bitnet"));
         assert!(!validate_vault_path("./vault.bitnet"));
+    }
+
+    // [BITNET-H3] NTFS Alternate Data Streams are rejected. `Path::extension()`
+    // would return None for `vault.bitnet:$DATA` (no real extension), so the
+    // suffix check must be done manually with `ends_with(.bitnet)`.
+    #[cfg(windows)]
+    #[test]
+    fn validate_vault_path_rejects_ntfs_ads() {
+        assert!(!validate_vault_path(r"C:\Users\alice\vault.bitnet:$DATA"));
+        assert!(!validate_vault_path(r"C:\Users\alice\vault.bitnet:hidden"));
+        // UNC ADS
+        assert!(!validate_vault_path(
+            r"\\?\C:\Users\alice\vault.bitnet:stream"
+        ));
+    }
+
+    // [BITNET-H3] Wildcards and shell metachars are rejected.
+    #[cfg(windows)]
+    #[test]
+    fn validate_vault_path_rejects_wildcards() {
+        assert!(!validate_vault_path(r"C:\vault*.bitnet"));
+        assert!(!validate_vault_path(r"C:\vault?.bitnet"));
+        assert!(!validate_vault_path(r"C:\vault<test>.bitnet"));
+        assert!(!validate_vault_path(r"C:\vault|pipe.bitnet"));
+        assert!(!validate_vault_path("C:\\vault\x00.bitnet"));
+        // Control char (TAB)
+        assert!(!validate_vault_path("C:\\vault\x09.bitnet"));
+    }
+
+    // [BITNET-H3] Length bounds.
+    #[test]
+    fn validate_vault_path_length_bounds() {
+        // Too short
+        assert!(!validate_vault_path(""));
+        assert!(!validate_vault_path("a.bitnet"));
+        // Too long
+        let long = format!("C:\\{}.bitnet", "a".repeat(5000));
+        assert!(!validate_vault_path(&long));
     }
 }

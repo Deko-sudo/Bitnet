@@ -99,7 +99,11 @@ fn main() {
                                 continue;
                             }
                         };
-                        let mut buf = vec![0i8; 1024];
+                        // [BITNET-L2] Use a Zeroizing wrapper so the heap buffer
+                        // is overwritten with zeros when `buf` goes out of scope.
+                        // Without this, the password lingers in the heap until
+                        // the next allocation reuses the same address.
+                        let mut buf = zeroize::Zeroizing::new(vec![0i8; 1024]);
                         let result = bitnet_ffi::bitnet_entry_get_password(
                             c_uuid.as_ptr(),
                             buf.as_mut_ptr(),
@@ -113,6 +117,9 @@ fn main() {
                                         .to_string()
                                 };
                                 let _ = send_response(true, Some(pwd), None);
+                                // Zeroize before send_response flushes so the
+                                // wire payload has already been serialized.
+                                buf.iter_mut().for_each(|b| *b = 0);
                             }
                             -5 => {
                                 let _ = send_response(

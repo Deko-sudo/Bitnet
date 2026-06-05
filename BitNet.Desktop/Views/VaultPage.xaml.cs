@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using System;
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
@@ -12,7 +13,14 @@ namespace BitNet.Desktop.Views
     public sealed partial class VaultPage : Page
     {
         public ObservableCollection<VaultEntry> Entries { get; } = new();
+        // [BITNET-M3] Deadline-based clipboard clear. The previous version
+        // restarted the 30s timer every time the user copied a new password,
+        // so the clipboard could be wiped 5s after the *second* copy (the
+        // first timer's deadline). The fix tracks the absolute deadline and
+        // ticks every 1s.
         private DispatcherTimer? _clipboardClearTimer;
+        private DateTimeOffset? _clipboardClearDeadline;
+        private const int ClipboardClearSeconds = 30;
 
         public VaultPage()
         {
@@ -154,10 +162,11 @@ namespace BitNet.Desktop.Views
                 return;
             }
 
+            var pwdBox = new PasswordBox { PlaceholderText = "Enter master password to save vault" };
             var pwdDialog = new ContentDialog
             {
                 Title = "Save Vault",
-                Content = new PasswordBox { PlaceholderText = "Enter master password to save vault" },
+                Content = pwdBox,
                 PrimaryButtonText = "Save",
                 CloseButtonText = "Cancel",
                 XamlRoot = this.XamlRoot
@@ -165,7 +174,7 @@ namespace BitNet.Desktop.Views
             var result = await pwdDialog.ShowAsync();
             if (result != ContentDialogResult.Primary) return;
 
-            var password = (pwdDialog.Content as PasswordBox)?.Password ?? "";
+            var password = pwdBox.Password ?? "";
             if (string.IsNullOrWhiteSpace(password))
             {
                 var errDialog = new ContentDialog
@@ -179,7 +188,10 @@ namespace BitNet.Desktop.Views
                 return;
             }
 
-            var saveResult = BitnetCore.SecureVaultSave(App.VaultPath, password);
+            // [BITNET-L1] Map raw FFI return code to a user-facing string.
+            // The previous message ("error -2") leaked internal codes.
+            var saveResult = BitnetCore.SecureVaultSaveSecure(App.VaultPath, secPwd);
+            secPwd.Dispose();
             if (saveResult == 0)
             {
                 var okDialog = new ContentDialog
@@ -196,7 +208,7 @@ namespace BitNet.Desktop.Views
                 var errDialog = new ContentDialog
                 {
                     Title = "Error",
-                    Content = $"Failed to save vault (error {saveResult}).",
+                    Content = BitnetError.Describe(saveResult),
                     CloseButtonText = "OK",
                     XamlRoot = this.XamlRoot
                 };
@@ -217,14 +229,49 @@ namespace BitNet.Desktop.Views
         private void StartClipboardClearTimer()
         {
             _clipboardClearTimer?.Stop();
-            _clipboardClearTimer = new DispatcherTimer();
-            _clipboardClearTimer.Interval = TimeSpan.FromSeconds(30);
-            _clipboardClearTimer.Tick += (s, e) =>
+            _clipboardClearDeadline = DateTimeOffset.UtcNow.AddSeconds(ClipboardClearSeconds);
+            _clipboardClearTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _clipboardClearTimer.Tick += ClipboardClearTick;
+            _clipboardClearTimer.Start();
+        }
+
+        private void ClipboardClearTick(object? sender, object e)
+        {
+            var deadline = _clipboardClearDeadline;
+            if (deadline == null)
+            {
+                _clipboardClearTimer?.Stop();
+                return;
+            }
+            if (DateTimeOffset.UtcNow < deadline.Value)
+            {
+                return;
+            }
+            try
             {
                 Clipboard.Clear();
-                _clipboardClearTimer?.Stop();
-            };
-            _clipboardClearTimer.Start();
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                // Clipboard locked by another process; not a security issue
+                // because the next copy will reset the deadline.
+            }
+            _clipboardClearTimer?.Stop();
+            _clipboardClearDeadline = null;
+        }
+
+        /// <summary>
+        /// Called when the user navigates away from this page. Stops the
+        /// timer so the Tick handler does not run on an unrooted page
+        /// (the previous implementation left the timer running until GC,
+        /// which could trigger COMExceptions on the dead XamlRoot).
+        /// </summary>
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            _clipboardClearTimer?.Stop();
+            _clipboardClearTimer = null;
+            _clipboardClearDeadline = null;
+            base.OnNavigatedFrom(e);
         }
     }
 

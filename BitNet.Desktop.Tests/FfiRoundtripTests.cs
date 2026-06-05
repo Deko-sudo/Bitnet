@@ -16,13 +16,18 @@ namespace BitNet.Desktop.Tests
     public class FfiRoundtripTests : IDisposable
     {
         private readonly string _vaultPath;
-        private readonly string _masterPassword;
+        // [BITNET-H1] Master password is held as SecureString and disposed
+        // with the test fixture. The plain `_masterPassword` field used to
+        // leak the password into the GC heap (visible in crash dumps).
+        private readonly System.Security.SecureString _masterPassword;
         private bool _vaultCreated;
 
         public FfiRoundtripTests(ITestOutputHelper output)
         {
             _vaultPath = Path.Combine(Path.GetTempPath(), $"bitnet_test_{Guid.NewGuid()}.bitnet");
-            _masterPassword = "master_password";
+            _masterPassword = new System.Security.SecureString();
+            foreach (var c in "master_password") _masterPassword.AppendChar(c);
+            _masterPassword.MakeReadOnly();
             _vaultCreated = false;
 
             // Ensure DLL can be found — add target\release to PATH for this process
@@ -49,6 +54,7 @@ namespace BitNet.Desktop.Tests
         {
             try { File.Delete(_vaultPath); } catch { /* ignore */ }
             BitnetCore.bitnet_vault_lock();
+            _masterPassword.Dispose();
         }
 
         // ===================================================================
@@ -56,11 +62,11 @@ namespace BitNet.Desktop.Tests
         // ===================================================================
         private void CreateAndUnlockVault()
         {
-            int rc = BitnetCore.SecureVaultCreate(_vaultPath, _masterPassword);
+            int rc = BitnetCore.SecureVaultCreateSecure(_vaultPath, _masterPassword);
             Assert.Equal(0, rc);
             _vaultCreated = true;
 
-            rc = BitnetCore.SecureVaultUnlock(_vaultPath, _masterPassword);
+            rc = BitnetCore.SecureVaultUnlockSecure(_vaultPath, _masterPassword);
             Assert.Equal(0, rc);
         }
 
@@ -80,13 +86,28 @@ namespace BitNet.Desktop.Tests
             return JsonSerializer.Serialize(dict);
         }
 
-        // Helper: convert JSON byte-array uuid to hex string
+        // Helper: extract the uuid field of an EntrySummary JSON object.
+        // EntrySummary.uuid is serialized as a **hex string** by
+        // serialize_uuid_hex in bitnet-core (see test_entry_summary_uuid_is_hex_string).
+        // The previous `UuidArrayToHex` helper assumed a JSON byte array
+        // — that was an old format. The current FFI returns a hex string
+        // and the helper just unwraps it.
         private static string UuidArrayToHex(JsonElement uuidElement)
         {
-            var sb = new System.Text.StringBuilder(32);
-            foreach (var b in uuidElement.EnumerateArray())
-                sb.AppendFormat("{0:x2}", b.GetByte());
-            return sb.ToString();
+            // The element is a hex string; if a caller hands us the array
+            // form (e.g. a future server backend), we still support it.
+            if (uuidElement.ValueKind == JsonValueKind.String)
+            {
+                return uuidElement.GetString() ?? "";
+            }
+            if (uuidElement.ValueKind == JsonValueKind.Array)
+            {
+                var sb = new System.Text.StringBuilder(32);
+                foreach (var b in uuidElement.EnumerateArray())
+                    sb.AppendFormat("{0:x2}", b.GetByte());
+                return sb.ToString();
+            }
+            return "";
         }
 
         [Fact]
@@ -99,11 +120,11 @@ namespace BitNet.Desktop.Tests
         [Fact]
         public void VaultCreate_Unlock_Success()
         {
-            int rc = BitnetCore.SecureVaultCreate(_vaultPath, _masterPassword);
+            int rc = BitnetCore.SecureVaultCreateSecure(_vaultPath, _masterPassword);
             Assert.Equal(0, rc);
             _vaultCreated = true;
 
-            rc = BitnetCore.SecureVaultUnlock(_vaultPath, _masterPassword);
+            rc = BitnetCore.SecureVaultUnlockSecure(_vaultPath, _masterPassword);
             Assert.Equal(0, rc);
         }
 

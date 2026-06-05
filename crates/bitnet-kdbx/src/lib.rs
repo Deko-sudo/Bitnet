@@ -449,12 +449,34 @@ pub fn save_vault(path: &str, groups: &[Group], master_password: &[u8]) -> Resul
             let _ = std::fs::set_permissions(&backup_path, perms);
         }
         let _ = std::fs::copy(path, &backup_path);
+        // [BITNET-L3] Tighten permissions on the backup so a non-owner
+        // cannot read the previous vault. Best-effort; failure here is
+        // non-fatal because the primary .bitnet has already been written
+        // with 0o600 in step 3.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &backup_path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
     }
 
     // --- 3. Запись во временный файл ---
     let temp_path = format!("{}.tmp", path);
     {
         let mut file = fs::File::create(&temp_path)?;
+        // [BITNET-L3] Restrict permissions on Unix so a concurrent process
+        // cannot read the vault. On Windows the ACLs inherited from the
+        // user's profile already restrict to the owner, so this is a
+        // no-op there.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            file.set_permissions(perms)?;
+        }
         file.write_all(&header_bytes)?;
         file.write_all(&header_hmac)?;
         // P1 #23: explicit u64 for cross-platform compatibility.

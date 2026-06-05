@@ -1,4 +1,5 @@
 ﻿import { test, expect } from '@playwright/test';
+import { resolve as resolvePath } from 'path';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -10,7 +11,9 @@ test.use({
  * Test 1 — popup.html renders correctly (open as file, no extension context needed).
  */
 test('popup.html renders locked status', async ({ page }) => {
-  await page.goto(`file:///d:/BitNet/bitnet/browser-extension/popup.html`);
+  // Use a relative path so the test is portable across machines.
+  const popupUrl = 'file:///' + resolvePath(__dirname, '..', '..', 'browser-extension', 'popup.html').replace(/\\/g, '/');
+  await page.goto(popupUrl);
   const status = page.locator('#status');
   await status.waitFor({ timeout: 5000 });
   const text = await status.textContent();
@@ -23,7 +26,8 @@ test('popup.html renders locked status', async ({ page }) => {
  * Test 2 — static test page has expected login form fields.
  */
 test('test login form page has expected fields', async ({ page }) => {
-  await page.goto(`file:///d:/BitNet/bitnet/tests/e2e/fixtures/test-form.html`);
+  const formUrl = 'file:///' + resolvePath(__dirname, 'fixtures', 'test-form.html').replace(/\\/g, '/');
+  await page.goto(formUrl);
   await expect(page.locator('#username')).toBeVisible();
   await expect(page.locator('#password')).toBeVisible();
   await expect(page.locator('#totp')).toBeVisible();

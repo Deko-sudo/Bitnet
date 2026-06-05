@@ -116,7 +116,7 @@ namespace BitNet.Desktop.Views
 
             if (result != 0)
             {
-                await ShowErrorAsync($"Failed to save entry (error {result}).");
+                await ShowErrorAsync(BitnetError.Describe(result));
                 return;
             }
 

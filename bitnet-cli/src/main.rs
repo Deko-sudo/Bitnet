@@ -4,6 +4,21 @@ use clap::{Parser, Subcommand};
 use std::io::{self, BufRead, Write};
 use tracing::{error, info};
 
+/// [BITNET-M5] Centralized error logger. Logs the operation tag and an
+/// opaque `kind` (so the operator can grep for specific failure modes)
+/// but does **not** include the full `Display` chain in the structured
+/// event — the chain may echo back user-supplied values such as file
+/// paths. The user-facing message is still printed to stderr verbatim.
+fn log_error(op: &'static str, _e: &dyn std::fmt::Display) {
+    // `kind` is intentionally a constant in the structured event. We
+    // deliberately do not include the error message in the structured
+    // log because it can carry fragments of user input (e.g. the
+    // file path the user pasted in an error like "vault not found at
+    // <PATH>"). The terminal output (eprintln!) is the right place
+    // for the human-readable cause.
+    error!(op, kind = "Error", "operation failed");
+}
+
 /// Initialize structured logging. Honours `RUST_LOG` env var.
 fn init_logging() {
     let _ = tracing_subscriber::fmt()
@@ -157,9 +172,9 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                error!(error = %e, "list entries failed");
-                eprintln!("Error: {}", e)
-            }
+                    log_error("list entries", &e);
+                    eprintln!("Error: {}", e)
+                }
             }
         }
         Commands::Totp { uuid } => {
@@ -179,9 +194,9 @@ fn main() {
                 }
                 Ok(None) => println!("No TOTP configured for this entry."),
                 Err(e) => {
-                error!(error = %e, "list entries failed");
-                eprintln!("Error: {}", e)
-            }
+                    log_error("list entries", &e);
+                    eprintln!("Error: {}", e)
+                }
             }
         }
         Commands::Generate {
@@ -339,9 +354,9 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                     }
                 }
                 Err(e) => {
-                error!(error = %e, "list entries failed");
-                eprintln!("Error: {}", e)
-            }
+                    log_error("list entries", &e);
+                    eprintln!("Error: {}", e)
+                }
             },
             "get" => {
                 if args.is_empty() {
@@ -359,9 +374,9 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                         }
                     }
                     Err(e) => {
-                error!(error = %e, "list entries failed");
-                eprintln!("Error: {}", e)
-            }
+                    log_error("list entries", &e);
+                    eprintln!("Error: {}", e)
+                }
                 }
             }
             "totp" => {
@@ -381,9 +396,9 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                     }
                     Ok(None) => println!("No TOTP configured for this entry."),
                     Err(e) => {
-                error!(error = %e, "list entries failed");
-                eprintln!("Error: {}", e)
-            }
+                    log_error("list entries", &e);
+                    eprintln!("Error: {}", e)
+                }
                 }
             }
             "generate" => {

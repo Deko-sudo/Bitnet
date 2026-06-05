@@ -209,7 +209,7 @@ namespace BitNet.Desktop.Views
                     var errorDialog = new ContentDialog
                     {
                         Title = "Error",
-                        Content = $"Failed to delete entry (error {delResult}).",
+                        Content = BitnetError.Describe(delResult) + " Entry not removed.",
                         CloseButtonText = "OK",
                         XamlRoot = this.XamlRoot
                     };

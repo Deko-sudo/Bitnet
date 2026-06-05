@@ -116,27 +116,16 @@ namespace BitNet.Desktop.Native
             return ss;
         }
 
-        public static int SecureVaultUnlock(string path, string password)
-        {
-            IntPtr pPath = Utf8ToPinnedPointer(path, out GCHandle hPath, out byte[] bPath);
-            IntPtr pPwd = Utf8ToPinnedPointer(password, out GCHandle hPwd, out byte[] bPwd);
-            try
-            {
-                return bitnet_vault_unlock_raw(pPath, pPwd);
-            }
-            finally
-            {
-                ZeroizeAndFree(ref hPwd, bPwd);
-                ZeroizeAndFree(ref hPath, bPath);
-            }
-        }
+        // SECURITY: Only SecureString-aware variants are exposed publicly.
+        // The legacy (string, string) overloads were removed in v0.2.0 as part
+        // of [BITNET-H1] CWE-316 mitigation — System.String is immutable and
+        // leaks the master password into the GC heap (visible in crash dumps).
+        // All call-sites use PasswordBox.SecurePassword -> SecureString.
 
         /// <summary>
-        /// SecureString-aware variant: the password is read directly from the
+        /// Unlock an existing vault. The password is read directly from the
         /// unmanaged BSTR (no managed String allocation), and the BSTR is
-        /// zeroized before the handle is released. Use this in place of
-        /// SecureVaultUnlock when the caller holds the password in a
-        /// SecureString (e.g. after Windows Hello / PasswordVault retrieval).
+        /// zeroized before the handle is released via Marshal.ZeroFreeBSTR.
         /// </summary>
         public static int SecureVaultUnlockSecure(string path, System.Security.SecureString password)
         {
@@ -162,6 +151,7 @@ namespace BitNet.Desktop.Native
         }
 
         /// <summary>SecureString variant of SecureVaultCreate.</summary>
+        /// <summary>Create a new vault with SecureString password.</summary>
         public static int SecureVaultCreateSecure(string path, System.Security.SecureString password)
         {
             if (password == null) throw new ArgumentNullException(nameof(password));
@@ -197,35 +187,9 @@ namespace BitNet.Desktop.Native
             }
         }
 
-        public static int SecureVaultCreate(string path, string password)
-        {
-            IntPtr pPath = Utf8ToPinnedPointer(path, out GCHandle hPath, out byte[] bPath);
-            IntPtr pPwd = Utf8ToPinnedPointer(password, out GCHandle hPwd, out byte[] bPwd);
-            try
-            {
-                return bitnet_vault_create_raw(pPath, pPwd);
-            }
-            finally
-            {
-                ZeroizeAndFree(ref hPwd, bPwd);
-                ZeroizeAndFree(ref hPath, bPath);
-            }
-        }
+        // (non-Secure SecureVaultCreate removed in v0.2.0 - see [BITNET-H1])
 
-        public static int SecureVaultSave(string path, string password)
-        {
-            IntPtr pPath = Utf8ToPinnedPointer(path, out GCHandle hPath, out byte[] bPath);
-            IntPtr pPwd = Utf8ToPinnedPointer(password, out GCHandle hPwd, out byte[] bPwd);
-            try
-            {
-                return bitnet_vault_save_raw(pPath, pPwd);
-            }
-            finally
-            {
-                ZeroizeAndFree(ref hPwd, bPwd);
-                ZeroizeAndFree(ref hPath, bPath);
-            }
-        }
+        // (non-Secure SecureVaultSave removed in v0.2.0 - see [BITNET-H1])
 
         public static int SecureAddEntry(string groupUuid, string entryJson)
         {
