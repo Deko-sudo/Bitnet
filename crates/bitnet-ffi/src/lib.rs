@@ -28,10 +28,14 @@ fn to_c_string(s: &str) -> *mut c_char {
     }
 }
 
-/// Initialize session manager. Call once before other functions.
-#[no_mangle]
 /// Initialize the global session manager. Safe to call repeatedly; the
 /// previous session, if any, is replaced.
+///
+/// # Safety
+///
+/// This function is safe to call from any thread but must not be called
+/// concurrently with other FFI functions that mutate the global `SESSION`.
+#[no_mangle]
 pub unsafe extern "C" fn bitnet_init() -> c_int {
     let mut sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     *sess = Some(SessionManager::new());
@@ -69,6 +73,16 @@ pub unsafe extern "C" fn bitnet_vault_create(
 }
 
 /// Unlock vault at given path with master password.
+///
+/// # Safety
+///
+/// - `path` and `password` must be either `null` or point to a NUL-terminated
+///   C string valid for the duration of the call.
+/// - Non-null strings are interpreted as UTF-8 lossy (`to_string_lossy`).
+/// - The master password is held in a `Zeroizing<Vec<u8>>` for the duration
+///   of the call; it is not persisted outside the FFI boundary.
+/// - The global `SESSION` is locked during the call; do not invoke other
+///   FFI functions from another thread concurrently.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_vault_unlock(
     path: *const c_char,
@@ -93,6 +107,11 @@ pub unsafe extern "C" fn bitnet_vault_unlock(
 }
 
 /// Lock vault and clear sensitive data from memory.
+///
+/// # Safety
+///
+/// Acquires the global `SESSION` lock; safe from any thread but should not
+/// be called concurrently with other FFI functions mutating session state.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_vault_lock() -> c_int {
     let mut sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
@@ -106,6 +125,11 @@ pub unsafe extern "C" fn bitnet_vault_lock() -> c_int {
 }
 
 /// Check if vault is unlocked.
+///
+/// # Safety
+///
+/// Acquires the global `SESSION` lock. Concurrent calls from multiple
+/// threads are serialized by the lock; no additional safety concerns.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_vault_is_unlocked() -> c_int {
     let sess = SESSION.lock().unwrap_or_else(|e| e.into_inner());
@@ -116,6 +140,14 @@ pub unsafe extern "C" fn bitnet_vault_is_unlocked() -> c_int {
 }
 
 /// Save vault to disk.
+///
+/// # Safety
+///
+/// - `path` and `password` must be either `null` or point to NUL-terminated
+///   C strings valid for the duration of the call.
+/// - Non-null strings are interpreted as UTF-8 lossy.
+/// - Save uses an atomic temp + fsync + rename pattern under the hood, so
+///   a crash mid-write will not corrupt the existing vault file.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_vault_save(path: *const c_char, password: *const c_char) -> c_int {
     if path.is_null() || password.is_null() {
@@ -139,7 +171,13 @@ pub unsafe extern "C" fn bitnet_vault_save(path: *const c_char, password: *const
 /// Re-encrypt the unlocked vault with a new master password. Requires the
 /// current (old) password as proof of knowledge.
 ///
-/// Returns 0 on success, -1 on null input, -4 on bad path, -2 on failure.
+/// # Safety
+///
+/// - `path`, `old_password`, `new_password` must be either `null` or
+///   point to NUL-terminated C strings valid for the duration of the call.
+/// - Non-null strings are interpreted as UTF-8 lossy.
+/// - Both passwords are held in `Zeroizing<Vec<u8>>` buffers for the call
+///   duration and zeroized on drop.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_change_master_password(
     path: *const c_char,
@@ -171,6 +209,14 @@ pub unsafe extern "C" fn bitnet_change_master_password(
 /// Add entry to a group.
 /// group_uuid and entry_json are UTF-8 null-terminated strings.
 /// entry_json format: {"uuid":"hex","title":"...","username":"...","password":"...","url":"...","notes":"...","totp_secret":"..."}
+///
+/// # Safety
+///
+/// - `group_uuid` and `entry_json` must be either `null` or point to
+///   NUL-terminated C strings valid for the duration of the call.
+/// - `entry_json` is parsed as JSON; size is capped at 10 MiB (anti-DoS).
+/// - The `password` and `totp_secret` fields are held in `Zeroizing`
+///   buffers and zeroized on drop.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_add_entry(
     group_uuid: *const c_char,
@@ -282,6 +328,13 @@ pub unsafe extern "C" fn bitnet_add_entry(
 
 /// Update entry by UUID.
 /// entry_json format same as bitnet_add_entry. Missing fields are left unchanged.
+///
+/// # Safety
+///
+/// - `entry_uuid` and `entry_json` must be either `null` or point to
+///   NUL-terminated C strings valid for the duration of the call.
+/// - `entry_json` size is capped at 10 MiB (anti-DoS).
+/// - `password` and `totp_secret` fields are held in `Zeroizing` buffers.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_update_entry(
     entry_uuid: *const c_char,
@@ -344,6 +397,14 @@ pub unsafe extern "C" fn bitnet_update_entry(
 }
 
 /// Delete entry by UUID.
+///
+/// # Safety
+///
+/// - `entry_uuid` must be either `null` or point to a NUL-terminated
+///   32-character hex string (UUID with optional trailing NUL).
+/// - Non-null strings are interpreted as UTF-8 lossy.
+/// - Returns 0 on success, -1 on null input, -2 if entry not found,
+///   -3 if vault is locked.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_delete_entry(entry_uuid: *const c_char) -> c_int {
     if entry_uuid.is_null() {
@@ -365,6 +426,15 @@ pub unsafe extern "C" fn bitnet_delete_entry(entry_uuid: *const c_char) -> c_int
 }
 
 /// Create a new group. Returns newly allocated C string with UUID. Caller must free with bitnet_free_string.
+///
+/// # Safety
+///
+/// - `parent_uuid` may be `null` (creates a root group) or point to a
+///   NUL-terminated 32-character hex string.
+/// - `name` must be non-null and point to a NUL-terminated C string.
+/// - Non-null strings are interpreted as UTF-8 lossy.
+/// - The returned `*mut c_char` must be released with `bitnet_free_string`
+///   using the same allocator; otherwise a memory leak occurs.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_create_group(
     parent_uuid: *const c_char,
@@ -603,7 +673,14 @@ pub unsafe extern "C" fn bitnet_free_string(ptr: *mut c_char) {
 }
 
 /// Get SHA-256 fingerprint of a vault file.
-/// Returns newly allocated C string. Caller must free with `bitnet_free_string`.
+/// Compute the vault fingerprint (SHA-256 hex) from a vault file.
+///
+/// # Safety
+///
+/// - `path` must be either `null` or point to a NUL-terminated C string
+///   identifying a valid `.bitnet` file path.
+/// - The returned `*mut c_char` (if non-null) must be released with
+///   `bitnet_free_string`. The string contains no sensitive data.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_vault_fingerprint(path: *const c_char) -> *mut c_char {
     if path.is_null() {
@@ -744,7 +821,8 @@ mod tests {
         let _ = std::fs::remove_file(&vault_path);
         assert_eq!(unsafe { vault_create(path_c, pwd_c) }, 0);
 
-        let root_group = unsafe { create_group(std::ptr::null(), c"Root".as_ptr()) };
+        let root_name = std::ffi::CString::new("Root").unwrap();
+        let root_group = unsafe { create_group(std::ptr::null(), root_name.as_ptr()) };
         assert!(!root_group.is_null());
         let root_uuid = unsafe { CStr::from_ptr(root_group).to_string_lossy().to_string() };
         let entry_json = r#"{"uuid":"550e8400e29b41d4a716446655440000","title":"Test","username":"u","password":"p","url":"","notes":"","totp_secret":"JBSWY3DPEHPK3PXP"}"#.to_string();
