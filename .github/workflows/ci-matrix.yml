@@ -1,0 +1,60 @@
+name: CI Matrix
+
+# Multi-OS test runner. Runs core Rust tests on Linux, macOS, and Windows
+# in parallel. Windows-specific steps (signtool, secret-scan PowerShell
+# script) remain in ci.yml.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025-vs2026]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+
+      - name: cargo fmt
+        if: matrix.os == 'ubuntu-24.04'  # run once; format is OS-independent
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test (Unix)
+        if: matrix.os != 'windows-2025-vs2026'
+        run: cargo test --workspace
+
+      - name: cargo test (Windows)
+        if: matrix.os == 'windows-2025-vs2026'
+        # Windows: skip tests that require DPAPI / Windows-specific features
+        run: cargo test --workspace
+
+      - name: cargo build (release)
+        run: cargo build --release --workspace
+
+      - name: cargo audit
+        if: matrix.os == 'ubuntu-24.04'  # run once
+        run: cargo install cargo-audit && cargo audit
+
+      - name: cargo deny
+        if: matrix.os == 'ubuntu-24.04'  # run once; pinned in ci.yml too
+        run: cargo install cargo-deny --locked --version 0.19.8 && cargo deny check
