@@ -6,6 +6,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 pub mod locked;
+pub mod password_strength;
 pub mod session_token;
 pub mod util;
 
