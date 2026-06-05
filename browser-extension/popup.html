@@ -6,8 +6,11 @@
     body { width: 300px; max-height: 400px; padding: 12px; font-family: sans-serif; margin: 0; }
     h1 { font-size: 16px; margin: 0 0 10px; }
     .status { padding: 8px; border-radius: 4px; margin-bottom: 10px; font-size: 13px; }
-    .locked { background: #fee; color: #900; }
-    .unlocked { background: #efe; color: #090; }
+    /* [BITNET-F2] Compound selectors — the popup.js helper sets
+       className to "status locked" / "status unlocked" so both the
+       base `.status` styles and the variant colour must apply. */
+    .status.locked { background: #fee; color: #900; }
+    .status.unlocked { background: #efe; color: #090; }
     .entry { padding: 6px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 13px; }
     .entry:hover { background: #f5f5f5; }
     .entry-title { font-weight: bold; }

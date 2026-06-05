@@ -188,6 +188,11 @@ namespace BitNet.Desktop.Views
                 return;
             }
 
+            // [BITNET-H1] Wrap the local password string into a SecureString
+            // for the FFI call.
+            var secPwd = new System.Security.SecureString();
+            foreach (var c in password) secPwd.AppendChar(c);
+            secPwd.MakeReadOnly();
             // [BITNET-L1] Map raw FFI return code to a user-facing string.
             // The previous message ("error -2") leaked internal codes.
             var saveResult = BitnetCore.SecureVaultSaveSecure(App.VaultPath, secPwd);

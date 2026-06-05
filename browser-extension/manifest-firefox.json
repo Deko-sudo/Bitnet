@@ -1,25 +1,66 @@
 ﻿{
-  "manifest_version": 2,
+  "_comment": "Firefox-specific manifest. Uses MV3 with browser_specific_settings.gecko (Firefox 109+).",
+  "manifest_version": 3,
   "name": "BitNet Password Manager",
   "version": "0.1.0",
   "description": "Autofill passwords from BitNet vault",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bitnet@bitnet.dev",
+      "strict_min_version": "109.0"
+    }
+  },
   "permissions": [
     "activeTab",
     "nativeMessaging",
-    "<all_urls>"
+    "scripting",
+    "clipboardWrite"
   ],
+  "host_permissions": [],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "background": {
     "scripts": ["background.js"],
     "persistent": false
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "https://*/*"
+      ],
+      "exclude_matches": [
+        "*://localhost/*",
+        "*://127.0.0.1/*",
+        "*://[::1]/*",
+        "*://10.*",
+        "*://172.16.*",
+        "*://172.17.*",
+        "*://172.18.*",
+        "*://172.19.*",
+        "*://172.20.*",
+        "*://172.21.*",
+        "*://172.22.*",
+        "*://172.23.*",
+        "*://172.24.*",
+        "*://172.25.*",
+        "*://172.26.*",
+        "*://172.27.*",
+        "*://172.28.*",
+        "*://172.29.*",
+        "*://172.30.*",
+        "*://172.31.*",
+        "*://192.168.*",
+        "*://*.local/*",
+        "*://*.internal/*",
+        "*://*.lan/*",
+        "*://*.onion/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],
-  "browser_action": {
+  "action": {
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -31,11 +72,5 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "applications": {
-    "gecko": {
-      "id": "bitnet@bitnet.dev",
-      "strict_min_version": "109.0"
-    }
   }
 }
