@@ -17,4 +17,6 @@ bitnet-crypto = { workspace = true }
 bitnet-core = { workspace = true }
 clap = { workspace = true }
 rpassword = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

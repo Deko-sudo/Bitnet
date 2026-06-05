@@ -2,6 +2,19 @@ use bitnet_core::{util, SessionManager};
 use bitnet_crypto::PasswordGeneratorFlags;
 use clap::{Parser, Subcommand};
 use std::io::{self, BufRead, Write};
+use tracing::{error, info};
+
+/// Initialize structured logging. Honours `RUST_LOG` env var.
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .without_time()
+        .try_init();
+}
 
 #[derive(Parser)]
 #[command(name = "bitnet-cli")]
@@ -82,6 +95,7 @@ enum Commands {
 }
 
 fn main() {
+    init_logging();
     let cli = Cli::parse();
     let no_echo = cli.no_echo;
     let manager = SessionManager::new();
@@ -107,6 +121,7 @@ fn main() {
         }
         Commands::Lock => {
             manager.lock();
+            info!("vault locked");
             println!("Vault locked.");
         }
         Commands::List => match manager.list_entries() {
@@ -121,12 +136,16 @@ fn main() {
                     );
                 }
             }
-            Err(e) => eprintln!("Error: {}", e),
+            Err(e) => {
+                error!(error = %e, "list entries failed");
+                eprintln!("Error: {}", e)
+            }
         },
         Commands::Get { uuid } => {
             let uuid_bytes = match parse_hex_uuid(&uuid) {
                 Some(u) => u,
                 None => {
+                    error!(uuid = %uuid, "invalid UUID format");
                     eprintln!("Invalid UUID format");
                     return;
                 }
@@ -137,13 +156,17 @@ fn main() {
                         println!("{}", password.as_str());
                     }
                 }
-                Err(e) => eprintln!("Error: {}", e),
+                Err(e) => {
+                error!(error = %e, "list entries failed");
+                eprintln!("Error: {}", e)
+            }
             }
         }
         Commands::Totp { uuid } => {
             let uuid_bytes = match parse_hex_uuid(&uuid) {
                 Some(u) => u,
                 None => {
+                    error!(uuid = %uuid, "invalid UUID format");
                     eprintln!("Invalid UUID format");
                     return;
                 }
@@ -155,7 +178,10 @@ fn main() {
                     }
                 }
                 Ok(None) => println!("No TOTP configured for this entry."),
-                Err(e) => eprintln!("Error: {}", e),
+                Err(e) => {
+                error!(error = %e, "list entries failed");
+                eprintln!("Error: {}", e)
+            }
             }
         }
         Commands::Generate {
@@ -312,7 +338,10 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                         );
                     }
                 }
-                Err(e) => eprintln!("Error: {}", e),
+                Err(e) => {
+                error!(error = %e, "list entries failed");
+                eprintln!("Error: {}", e)
+            }
             },
             "get" => {
                 if args.is_empty() {
@@ -329,7 +358,10 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                             println!("{}", password.as_str());
                         }
                     }
-                    Err(e) => eprintln!("Error: {}", e),
+                    Err(e) => {
+                error!(error = %e, "list entries failed");
+                eprintln!("Error: {}", e)
+            }
                 }
             }
             "totp" => {
@@ -348,7 +380,10 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                         }
                     }
                     Ok(None) => println!("No TOTP configured for this entry."),
-                    Err(e) => eprintln!("Error: {}", e),
+                    Err(e) => {
+                error!(error = %e, "list entries failed");
+                eprintln!("Error: {}", e)
+            }
                 }
             }
             "generate" => {
