@@ -469,6 +469,13 @@ pub unsafe extern "C" fn bitnet_create_group(
 /// Get password for an entry by UUID (hex string).
 /// Caller must provide buffer `out_buf` of length `out_len`.
 /// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// - `entry_uuid` must be a non-null NUL-terminated 32-character hex string.
+/// - `out_buf` must be non-null and point to at least `out_len` writable bytes.
+/// - The caller is responsible for zeroizing `out_buf` after use; it will
+///   contain the plaintext password on success.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_entry_get_password(
     entry_uuid: *const c_char,
@@ -510,6 +517,14 @@ pub unsafe extern "C" fn bitnet_entry_get_password(
 
 /// Generate a random password.
 /// Returns newly allocated C string. Caller must free with `bitnet_free_string`.
+///
+/// # Safety
+///
+/// - `length` is the desired length; clamped to 1..=1024 internally.
+/// - `include_*` are treated as boolean (0 = false, non-zero = true).
+/// - The returned `*mut c_char` (if non-null) must be released with
+///   `bitnet_free_string`; the caller is responsible for zeroizing the
+///   plaintext password after use.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_generate_password(
     length: c_int,
@@ -542,6 +557,15 @@ pub unsafe extern "C" fn bitnet_generate_password(
 
 /// Get TOTP code and remaining seconds for an entry.
 /// Returns newly allocated C string "code, remaining". Caller must free with `bitnet_free_string`.
+///
+/// # Safety
+///
+/// - `entry_uuid` must be either `null` or point to a NUL-terminated
+///   32-character hex string.
+/// - The returned `*mut c_char` (if non-null) must be released with
+///   `bitnet_free_string`.
+/// - The C string contains a plaintext TOTP code; the caller is responsible
+///   for zeroizing it after use.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_entry_get_totp(entry_uuid: *const c_char) -> *mut c_char {
     if entry_uuid.is_null() {
@@ -567,6 +591,15 @@ pub unsafe extern "C" fn bitnet_entry_get_totp(entry_uuid: *const c_char) -> *mu
 }
 
 /// Get TOTP code into caller-provided buffer (bounded, safer for C# interop).
+///
+/// # Safety
+///
+/// - `entry_uuid` must be a non-null NUL-terminated 32-character hex string.
+/// - `out_buf` must be non-null and point to at least `buf_len` writable bytes.
+/// - `out_remaining` may be null; if non-null, receives remaining seconds
+///   (0–30).
+/// - On success, the code is NUL-terminated within `buf_len` bytes
+///   (truncated if necessary); the caller is responsible for zeroizing.
 #[no_mangle]
 pub unsafe extern "C" fn bitnet_entry_get_totp_to_buffer(
     entry_uuid: *const c_char,
