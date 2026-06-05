@@ -5,7 +5,7 @@
 | Компонент | Статус | Команда |
 |-----------|--------|---------|
 | Rust workspace | OK | `cargo build --release --workspace` |
-| Rust tests (71+) | OK | `cargo test --workspace` |
+| Rust tests (111+) | OK | `cargo test --workspace` |
 | C# FFI roundtrip (7/7) | OK | `dotnet test BitNet.Desktop.Tests/` |
 | Playwright E2E (5/5) | OK | `npx playwright test` |
 | **C# WinUI 3 Desktop** | **REQUIRES VISUAL STUDIO BUILD TOOLS** | `dotnet build BitNet.Desktop/` |
@@ -54,14 +54,16 @@ $env:VisualStudioVersion = "17.0"
 ```
 
 ### Step 4 — Build BitNet Desktop
+
 ```powershell
-cd D:\BitNet\bitnet\BitNet.Desktop
+cd D:\BitNet\BitNet.Desktop
 dotnet build -c Release
 ```
 
 Expected: `Build succeeded. 0 Errors. 14 Warnings (nullable annotations).`
 
 ### Step 5 — Run
+
 ```powershell
 dotnet run -c Release
 ```
@@ -71,7 +73,7 @@ dotnet run -c Release
 Always run these first to catch Rust-side issues:
 
 ```powershell
-cd D:\BitNet\bitnet
+cd D:\BitNet
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
 ```

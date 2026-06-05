@@ -51,10 +51,13 @@ Out of scope:
 
 | ID | Risk | Reason | Mitigation Plan |
 |----|------|--------|-----------------|
-| M-004 | `chrome-extension://*/*` wildcard allows any extension | Dev convenience | Production builds pin `allowed_origins` to specific extension ID |
 | L-002 | UTF-8 lossy conversion for passwords with invalid bytes | C ABI limitation | Documented; all interfaces treat passwords as UTF-8 |
-| L-003 | Browser origin not validated in Native Host | OS/browser sandbox assumed | Rely on `allowed_origins` manifest + OS sandbox |
-| L-004 | Clipboard not auto-cleared after copy | C# side implementation pending | Auto-clear after 30s planned for v0.2 |
+
+> **Recently closed (v0.1 hardening):** M-004 (wildcard `allowed_origins`),
+> L-003 (origin not validated in native host), L-004 (clipboard not
+> auto-cleared), plus H1-H3 / M1-M5 / L1-L6 from the internal
+> [SECURITY_AUDIT.md](SECURITY_AUDIT.md). See
+> [docs/SECURITY_NOTES.md](docs/SECURITY_NOTES.md) for the current list.
 
 ## Bug Bounty
 

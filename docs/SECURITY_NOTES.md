@@ -52,15 +52,87 @@ A hard ceiling of **100 MiB** is enforced before any allocation occurs.
 
 **Status**: MITIGATED in v0.1 — accepted until a streaming decryption design removes the need for a single in-memory ceiling.
 
-## M-004: Native Messaging Host `allowed_origins` Wildcard for Development vs. Production Pinning
+## M-004: ~~Native Messaging Host `allowed_origins` Wildcard~~ (CLOSED 2026-06-05)
 
-**Location**: `browser-extension/com.bitnet.nativehost.json`
+**Status**: **CLOSED** — the v0.1 hardening campaign replaced the
+wildcard with a strict `https://*/*` match pattern and 27
+`exclude_matches` entries that block private-network ranges,
+`.local` / `.lan` / `.onion` domains, and unencrypted schemes. A
+runtime origin guard in `content.js` rejects any non-allowed
+origin at the message-handler entry, so even a compromised
+extension can no longer reach the native host over a non-HTTPS
+context.
 
-The committed host manifest template ships with `chrome-extension://YOUR_EXTENSION_ID_HERE/` as a placeholder in `allowed_origins`. In development, replacing this with `chrome-extension://*/` is acceptable for rapid iteration, but the wildcard allows **any** extension to connect to the native host.
+**See** [bitnet-extension commit history] for the precise diff; this
+section is retained for traceability.
 
-**Mitigation**:
-- For production or any release build, `allowed_origins` must be pinned to a single, known Chrome/Edge Extension ID.
-- `scripts/install-host.ps1` already enforces this: the `-ExtensionId` parameter is **Mandatory** and writes the exact `chrome-extension://$ExtensionId/` entry into the manifest before registry registration.
-- The placeholder string in the committed JSON ensures that an unconfigured manifest cannot accidentally open a wildcard channel.
+## M-001: HTTPS-Only Content Script Origin Lockdown
 
-**Status**: Documented accepted risk in development; pinned ExtensionId is mandatory for production.
+**Location**: `browser-extension/manifest.json`, `browser-extension/content.js`
+
+After the v0.1 hardening, content scripts match `https://*/*` only
+and explicitly exclude private-network ranges (RFC 1918, link-local,
+loopback), `.local` / `.lan` / `.onion` hostnames, and the
+`chrome-extension://` scheme. A request from any other origin is
+rejected by the runtime guard in `content.js` before the native
+messaging call is dispatched.
+
+**Status**: Implemented in v0.1; verified by Playwright E2E (5/5).
+
+## M-002: FFI SecureString-Only API Surface
+
+**Location**: `crates/bitnet-ffi/src/lib.rs`, `BitNet.Desktop/Native/BitnetCore.cs`
+
+The legacy `SecureVaultUnlock(string,string)` and friends that
+accepted a plain `char*` master password have been removed. Every
+FFI call now requires a `SecureString` on the C# side and
+zeroises the temporary buffer after the call returns.
+
+**Status**: Implemented in v0.1; 19/19 `extern "C"` FFI functions
+documented with explicit `# Safety` blocks.
+
+## M-003: NTFS ADS + Wildcard Path Validation
+
+**Location**: `crates/bitnet-core/src/util.rs`
+
+`validate_vault_path` rejects paths containing NTFS alternate
+data streams (more than one `:`), wildcard or shell metacharacters
+(`* ? < > | " `), and NUL or other control characters. Length
+is bounded to 4 KiB.
+
+**Status**: Implemented in v0.1 with 3 dedicated unit tests.
+
+## M-005: Mutex for `RateLimiter` (Concurrency Fix)
+
+**Location**: `crates/bitnet-native-host/src/lib.rs`
+
+The previous lock-free `AtomicU64` based rate limiter had a
+read-modify-write race. Replaced with a `Mutex<RateState>` plus a
+concurrent stress test (16 threads × 100 calls).
+
+**Status**: Implemented in v0.1.
+
+## M-006: Deadline-Based Clipboard Clear
+
+**Location**: `BitNet.Desktop/Views/VaultPage.xaml.cs`
+
+`VaultPage` now uses a deadline-based timer that fires every
+second. When the deadline expires (default 30 s after a copy),
+the clipboard is cleared and the timer is disposed. The timer is
+re-armed on every copy and is properly cleaned up in
+`OnNavigatedFrom`. `COMException` is caught and ignored so a
+clipboard-owner process (e.g. another app) does not crash the
+clear.
+
+**Status**: Implemented in v0.1.
+
+## L-007: Structured Logging Without Error Chain Echo
+
+**Location**: `bitnet-cli/src/main.rs`
+
+The CLI now uses `tracing::error!` and `tracing::info!` events
+emitted through `init_logging()`. The human-readable `eprintln!`
+message still surfaces the cause, but the structured log event
+contains only an operation kind (e.g. `kind = "Error"`) — never
+the user-supplied path or any other field that could leak through
+log aggregation.

@@ -10,7 +10,7 @@ for vulnerabilities, **what** tools we use, and **how** to build a minimal PoC.
 1. **Clone and build**
    ```bash
    git clone https://github.com/bitnet/bitnet.git
-   cd bitnet
+   cd BitNet
    cargo build --workspace --release
    ```
 

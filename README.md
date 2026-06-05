@@ -23,9 +23,12 @@ Offline password manager for Windows with Zero Trust architecture, built in Rust
 ### 1. Build Rust Workspace
 
 ```bash
-cd bitnet
+cd BitNet
 cargo build --release --workspace
 ```
+
+> **Note:** The repository is a single Cargo workspace rooted at `D:\BitNet\`.
+> There is no `bitnet/bitnet/` subdirectory anymore.
 
 This produces:
 - `target/release/bitnet-cli.exe`
@@ -94,7 +97,7 @@ Or use the build script:
 ### 5. Run Tests
 
 ```bash
-# Rust unit tests (64+ tests across all crates)
+# Rust unit tests (111+ tests across all crates)
 cargo test --workspace
 
 # Clippy (zero warnings policy)
