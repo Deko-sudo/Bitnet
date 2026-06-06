@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <Compile Include="..\BitNet.Desktop\Native\BitnetCore.cs" Link="BitnetCore.cs" />
+    <Compile Include="..\BitNet.Desktop\Helpers\SecureMemory.cs" Link="Helpers\SecureMemory.cs" />
   </ItemGroup>
 
 </Project>

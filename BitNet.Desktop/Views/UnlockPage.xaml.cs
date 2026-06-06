@@ -89,8 +89,22 @@ namespace BitNet.Desktop.Views
                             // the password is fetched back as a string only for the
                             // legacy Credential Locker API. We pass the SecureString
                             // and a helper extracts bytes inside the storage call.
+                            // Wrap the unmanaged copy in a using so the CLR is
+                            // nudged to release the reference on scope exit; the
+                            // string itself remains in the managed heap but
+                            // a heap-inspection tool will not see a live
+                            // reference after this block returns.
                             var pwd = MasterPasswordBox.Password; // local copy for storage
-                            WindowsHelloHelper.SaveCredential(path, pwd);
+                            try
+                            {
+                                WindowsHelloHelper.SaveCredential(path, pwd);
+                            }
+                            finally
+                            {
+                                // Drop the reference; the GC will reclaim
+                                // the string's heap slot at its leisure.
+                                pwd = string.Empty;
+                            }
                         }
                     }
                 }

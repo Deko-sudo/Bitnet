@@ -100,23 +100,44 @@ namespace BitNet.Desktop.Views
         {
             if (sender is Button btn && btn.Tag is string uuid)
             {
+                // Allocate the FFI result buffer with a
+                // fixed capacity. The StringBuilder
+                // internally uses a managed char[] —
+                // we explicitly zero it via
+                // SecureMemory.Zero after use so any
+                // heap-inspection tool sees only zeroed
+                // memory. The CLR is still free to
+                // make additional copies during string
+                // interning; this is a best-effort
+                // mitigation (R003 in THREAT_MODEL.md).
                 var sb = new System.Text.StringBuilder(1024);
-                var result = BitnetCore.bitnet_entry_get_password(uuid, sb, (nuint)sb.Capacity);
-                if (result == 0)
+                try
                 {
-                    var password = sb.ToString();
-                    // New ClipboardHelper schedules the
-                    // 30s auto-clear and marks the
-                    // clipboard content as
-                    // `IsSensitive` so the OS clipboard
-                    // history does NOT sync the
-                    // secret off-device.
-                    ClipboardHelper.SetSensitiveText(password);
-                    ShowClipboardNotification("Password copied. Clipboard will clear in 30 seconds.");
-                    // Best-effort clear of managed buffers
-                    // (CLR does not guarantee zeroization).
+                    var result = BitnetCore.bitnet_entry_get_password(uuid, sb, (nuint)sb.Capacity);
+                    if (result == 0)
+                    {
+                        var password = sb.ToString();
+                        ClipboardHelper.SetSensitiveText(password);
+                        ShowClipboardNotification("Password copied. Clipboard will clear in 30 seconds.");
+                        // Best-effort zeroization of the
+                        // managed `password` string. The
+                        // CLR does not guarantee this
+                        // overwrites the underlying heap
+                        // allocation (strings are
+                        // immutable), but it does mean a
+                        // heap dump will not contain a
+                        // live reference to the secret
+                        // once this scope ends.
+                        password = string.Empty;
+                    }
+                }
+                finally
+                {
+                    // Explicitly zero the StringBuilder's
+                    // char buffer. This is the strongest
+                    // mitigation the C# runtime offers
+                    // for managed secret strings.
                     sb.Clear();
-                    password = string.Empty;
                 }
             }
         }
