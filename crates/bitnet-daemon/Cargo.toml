@@ -1,0 +1,21 @@
+[package]
+name = "bitnet-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BitNet daemon: long-running process that holds an unlocked vault and serves JSON-RPC requests over a local IPC transport (Named Pipe on Windows, abstract Unix socket on Unix)."
+
+[lib]
+name = "bitnet_daemon"
+path = "src/lib.rs"
+
+[dependencies]
+bitnet-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+tracing = "0.1"
+thiserror = { workspace = true }
+zeroize = { workspace = true }

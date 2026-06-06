@@ -7,6 +7,7 @@ members = [
     "crates/bitnet-dpapi",
     "crates/bitnet-ffi",
     "crates/bitnet-native-host",
+    "crates/bitnet-daemon",
     "bitnet-cli",
 ]
 exclude = ["fuzz"]
@@ -25,6 +26,7 @@ bitnet-kdbx = { path = "crates/bitnet-kdbx" }
 bitnet-core = { path = "crates/bitnet-core" }
 bitnet-dpapi = { path = "crates/bitnet-dpapi" }
 bitnet-ffi = { path = "crates/bitnet-ffi" }
+bitnet-daemon = { path = "crates/bitnet-daemon" }
 aes-gcm = "0.10"
 argon2 = "0.5"
 sha2 = "0.10"

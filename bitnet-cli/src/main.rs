@@ -52,6 +52,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run as a long-lived background daemon. Other bitnet-cli
+    /// invocations and the browser extension can attach to it
+    /// instead of unlocking the vault on every command.
+    ///
+    /// On Windows this is currently a stub (returns
+    /// "unsupported") until the Win32 Named Pipe backend lands;
+    /// see `docs/PHASE_3_DESIGN.md` for the full design.
+    Daemon,
+    /// Ping the running daemon. Exits 0 if it is reachable, 1
+    /// otherwise. Useful for shell scripts that need to know
+    /// whether a daemon is up before running sensitive commands.
+    Ping,
     /// Unlock a vault file
     Unlock {
         /// Path to vault file
@@ -121,6 +133,46 @@ fn main() {
     }
 
     match cli.command {
+        Commands::Daemon => {
+            // Long-running accept loop. We hold the state mutex
+            // inside `handle_one_in_memory`; the loop itself runs
+            // single-threaded which is sufficient for the v0.1
+            // design (see docs/PHASE_3_DESIGN.md).
+            let server = bitnet_daemon::Server::bind();
+            let server = match server {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("daemon: failed to bind: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let state = bitnet_daemon::DaemonState::new();
+            let state = std::sync::Mutex::new(state);
+            info!("bitnet-cli daemon listening");
+            loop {
+                match server.accept() {
+                    Ok(mut conn) => {
+                        if let Err(_e) =
+                            bitnet_daemon::handle_one_in_memory(&state, &mut conn)
+                        {
+                            error!(op = "daemon", kind = "Error", "client dispatch failed");
+                        }
+                    }
+                    Err(e) => {
+                        error!(op = "daemon", kind = "Error", "accept failed");
+                        tracing::debug!(error = %e, "accept failed");
+                    }
+                }
+            }
+        }
+        Commands::Ping => {
+            if bitnet_daemon::daemon_alive() {
+                println!("daemon alive");
+            } else {
+                eprintln!("daemon not reachable");
+                std::process::exit(1);
+            }
+        }
         Commands::Unlock { path } => {
             if !util::validate_vault_path(&path) {
                 eprintln!(

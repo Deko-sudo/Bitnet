@@ -15,6 +15,7 @@ zeroize = { workspace = true }
 bitnet-kdbx = { workspace = true }
 bitnet-crypto = { workspace = true }
 bitnet-core = { workspace = true }
+bitnet-daemon = { workspace = true }
 clap = { workspace = true }
 rpassword = { workspace = true }
 tracing = "0.1"
