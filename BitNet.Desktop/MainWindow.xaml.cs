@@ -1,4 +1,5 @@
-﻿using Microsoft.UI.Xaml;
+﻿using BitNet.Desktop.Helpers;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
 namespace BitNet.Desktop
@@ -13,6 +14,20 @@ namespace BitNet.Desktop
             NavView.Visibility = Visibility.Collapsed;
             ContentFrame.Navigate(typeof(Views.UnlockPage));
             ContentFrame.Navigated += ContentFrame_Navigated;
+
+            // Wire up the AutoLockService. When the idle
+            // timer fires, we navigate back to the unlock
+            // page (which discards any in-memory secrets)
+            // and clear the clipboard just in case.
+            AutoLockService.Instance.Load();
+            AutoLockService.Instance.AutoLock += (_, _) =>
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    ClipboardHelper.ClearClipboard();
+                    ContentFrame.Navigate(typeof(Views.UnlockPage));
+                });
+            };
         }
 
         private void ContentFrame_Navigated(object sender, Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
@@ -20,10 +35,18 @@ namespace BitNet.Desktop
             if (e.SourcePageType == typeof(Views.UnlockPage))
             {
                 NavView.Visibility = Visibility.Collapsed;
+                // Entering the unlock page means the vault
+                // is locked; the AutoLockService no longer
+                // needs to fire.
+                AutoLockService.Instance.LockNow();
             }
             else
             {
                 NavView.Visibility = Visibility.Visible;
+                // Successful navigation to a non-unlock
+                // page = successful unlock. Reset the idle
+                // timer.
+                AutoLockService.Instance.Reset();
             }
         }
 

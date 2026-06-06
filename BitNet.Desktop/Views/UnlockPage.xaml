@@ -41,10 +41,31 @@
                          IsReadOnly="True"
                          TextChanged="VaultPathBox_TextChanged"></TextBox>
                 
-                <PasswordBox x:Name="MasterPasswordBox" 
+                <PasswordBox x:Name="MasterPasswordBox"
                              Header="Master password"
                              PlaceholderText="Enter your master password"
-                             KeyDown="MasterPasswordBox_KeyDown"/>
+                             KeyDown="MasterPasswordBox_KeyDown"
+                             PasswordChanged="MasterPasswordBox_PasswordChanged"/>
+
+                <!-- Password strength meter (Bitwarden-style) -->
+                <Grid x:Name="StrengthPanel" Margin="0,4,0,0" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <ProgressBar x:Name="StrengthBar"
+                                 Grid.Row="0"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="0"
+                                 Height="4"/>
+                    <TextBlock x:Name="StrengthLabel"
+                               Grid.Row="1"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               HorizontalAlignment="Right"
+                               Margin="0,4,0,0"
+                               Text=""/>
+                </Grid>
                 
                 <Button x:Name="UnlockButton"
                         Content="Unlock Vault"

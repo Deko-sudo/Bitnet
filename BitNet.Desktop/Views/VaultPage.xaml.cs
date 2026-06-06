@@ -5,22 +5,21 @@ using System;
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using BitNet.Desktop.Helpers;
 using BitNet.Desktop.Native;
-using Windows.ApplicationModel.DataTransfer;
+// Windows.ApplicationModel.DataTransfer is no longer
+// needed here — clipboard operations go through
+// `ClipboardHelper`.
 
 namespace BitNet.Desktop.Views
 {
     public sealed partial class VaultPage : Page
     {
         public ObservableCollection<VaultEntry> Entries { get; } = new();
-        // [BITNET-M3] Deadline-based clipboard clear. The previous version
-        // restarted the 30s timer every time the user copied a new password,
-        // so the clipboard could be wiped 5s after the *second* copy (the
-        // first timer's deadline). The fix tracks the absolute deadline and
-        // ticks every 1s.
-        private DispatcherTimer? _clipboardClearTimer;
-        private DateTimeOffset? _clipboardClearDeadline;
-        private const int ClipboardClearSeconds = 30;
+        // The 30-second auto-clear and `IsSensitive` flag
+        // are now handled by `ClipboardHelper`. The deadline
+        // tracking and tick that used to live here have been
+        // moved to that helper.
 
         public VaultPage()
         {
@@ -106,12 +105,16 @@ namespace BitNet.Desktop.Views
                 if (result == 0)
                 {
                     var password = sb.ToString();
-                    var package = new DataPackage();
-                    package.SetText(password);
-                    Clipboard.SetContent(package);
+                    // New ClipboardHelper schedules the
+                    // 30s auto-clear and marks the
+                    // clipboard content as
+                    // `IsSensitive` so the OS clipboard
+                    // history does NOT sync the
+                    // secret off-device.
+                    ClipboardHelper.SetSensitiveText(password);
                     ShowClipboardNotification("Password copied. Clipboard will clear in 30 seconds.");
-                    StartClipboardClearTimer();
-                    // Best-effort clear of managed buffers (CLR does not guarantee zeroization)
+                    // Best-effort clear of managed buffers
+                    // (CLR does not guarantee zeroization).
                     sb.Clear();
                     password = string.Empty;
                 }
@@ -231,51 +234,14 @@ namespace BitNet.Desktop.Views
             // In a real app, show a TeachingTip or InfoBar
         }
 
-        private void StartClipboardClearTimer()
-        {
-            _clipboardClearTimer?.Stop();
-            _clipboardClearDeadline = DateTimeOffset.UtcNow.AddSeconds(ClipboardClearSeconds);
-            _clipboardClearTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            _clipboardClearTimer.Tick += ClipboardClearTick;
-            _clipboardClearTimer.Start();
-        }
-
-        private void ClipboardClearTick(object? sender, object e)
-        {
-            var deadline = _clipboardClearDeadline;
-            if (deadline == null)
-            {
-                _clipboardClearTimer?.Stop();
-                return;
-            }
-            if (DateTimeOffset.UtcNow < deadline.Value)
-            {
-                return;
-            }
-            try
-            {
-                Clipboard.Clear();
-            }
-            catch (System.Runtime.InteropServices.COMException)
-            {
-                // Clipboard locked by another process; not a security issue
-                // because the next copy will reset the deadline.
-            }
-            _clipboardClearTimer?.Stop();
-            _clipboardClearDeadline = null;
-        }
-
         /// <summary>
-        /// Called when the user navigates away from this page. Stops the
-        /// timer so the Tick handler does not run on an unrooted page
-        /// (the previous implementation left the timer running until GC,
-        /// which could trigger COMExceptions on the dead XamlRoot).
+        /// Called when the user navigates away from this page. The
+        /// `ClipboardHelper` singleton survives the page lifetime, so
+        /// no per-page teardown is needed for the auto-clear
+        /// timer. The 30s deadline is preserved across navigations.
         /// </summary>
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
-            _clipboardClearTimer?.Stop();
-            _clipboardClearTimer = null;
-            _clipboardClearDeadline = null;
             base.OnNavigatedFrom(e);
         }
     }

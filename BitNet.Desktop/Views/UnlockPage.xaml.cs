@@ -243,6 +243,33 @@ namespace BitNet.Desktop.Views
             }
         }
 
+        /// <summary>
+        /// Live password strength feedback (Bitwarden-style).
+        /// Only shown when the user types at least 4
+        /// characters so we don't flash "Very weak" for
+        /// single-character inputs.
+        /// </summary>
+        private void MasterPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+        {
+            var pwd = MasterPasswordBox.Password;
+            if (string.IsNullOrEmpty(pwd) || pwd.Length < 4)
+            {
+                StrengthPanel.Visibility = Visibility.Collapsed;
+                return;
+            }
+            StrengthPanel.Visibility = Visibility.Visible;
+            var (score, label) = PasswordStrength.Score(pwd);
+            StrengthBar.Value = score;
+            // The accent colour is applied through the
+            // ProgressBar's `Foreground` resource — the
+            // brush keys are looked up by name from
+            // Standard ControlResources.
+            var brushKey = PasswordStrength.AccentBrushKey(label);
+            StrengthBar.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources[brushKey];
+            StrengthLabel.Text = $"{PasswordStrength.LabelText(label)} · {score}/100";
+        }
+
         private void VaultPathBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             ErrorText.Visibility = Visibility.Collapsed;
