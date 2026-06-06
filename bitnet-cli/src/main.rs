@@ -436,9 +436,9 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                         }
                     }
                     Err(e) => {
-                    log_error("list entries", &e);
-                    eprintln!("Error: {}", e)
-                }
+                        log_error("list entries", &e);
+                        eprintln!("Error: {}", e)
+                    }
                 }
             }
             "totp" => {
@@ -458,9 +458,9 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                     }
                     Ok(None) => println!("No TOTP configured for this entry."),
                     Err(e) => {
-                    log_error("list entries", &e);
-                    eprintln!("Error: {}", e)
-                }
+                        log_error("list entries", &e);
+                        eprintln!("Error: {}", e)
+                    }
                 }
             }
             "generate" => {

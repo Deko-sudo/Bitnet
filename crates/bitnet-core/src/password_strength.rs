@@ -137,10 +137,7 @@ mod tests {
     #[test]
     fn accepts_strong_passwords() {
         assert_eq!(validate_strength(b"MyS3cretP@ssw0rd"), None);
-        assert_eq!(
-            validate_strength(b"correct horse battery staple"),
-            None
-        );
+        assert_eq!(validate_strength(b"correct horse battery staple"), None);
         assert_eq!(validate_strength(b"Tr0ub4dor&3xx"), None);
     }
 
@@ -159,9 +156,6 @@ mod tests {
     #[test]
     fn rejects_two_letter_only_classes() {
         // Two classes (lower + upper) but no digit/symbol — still weak
-        assert_eq!(
-            validate_strength(b"abcdefghijKL"),
-            Some(Weakness::NoDigit)
-        );
+        assert_eq!(validate_strength(b"abcdefghijKL"), Some(Weakness::NoDigit));
     }
 }

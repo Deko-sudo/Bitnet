@@ -37,6 +37,11 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
+        # -D warnings treats every warning as an
+        # error, matching the .cargo/security.yaml
+        # `deny = "warnings"` setting. We pin the
+        # toolchain to `stable` (dtolnay/rust-toolchain
+        # above) to make builds reproducible.
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test (Unix)
@@ -53,8 +58,13 @@ jobs:
 
       - name: cargo audit
         if: matrix.os == 'ubuntu-24.04'  # run once
-        run: cargo install cargo-audit && cargo audit
+        # --locked pins to the version in
+        # Cargo.lock so CI is reproducible.
+        run: cargo install cargo-audit --locked && cargo audit
 
       - name: cargo deny
         if: matrix.os == 'ubuntu-24.04'  # run once; pinned in ci.yml too
+        # 0.19.8 is the last 0.19.x release that
+        # supports `vulnerability = "deny"`. Newer
+        # 0.20.x removed that key.
         run: cargo install cargo-deny --locked --version 0.19.8 && cargo deny check

@@ -49,8 +49,8 @@ pub use client::{daemon_alive, describe_error_code, make_request, split_response
 pub use daemon::{
     dispatch, handle_one, handle_one_in_memory, DaemonState, NoopVaultService, VaultService,
 };
+pub use ipc::{Client, Conn, Server};
 pub use protocol::{
     code, hex_decode_lower, hex_encode_lower, make_err, make_ok, ErrorBody, Method, Request,
     Response,
 };
-pub use ipc::{Client, Conn, Server};

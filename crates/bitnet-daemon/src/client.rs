@@ -23,8 +23,8 @@ pub fn call(token: &[u8], request: &Request) -> io::Result<serde_json::Value> {
     let mut signed = request.clone();
     signed.auth = Some(auth_hex);
 
-    let frame = serde_json::to_value(&signed)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let frame =
+        serde_json::to_value(&signed).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     protocol::write_frame(&mut client, &frame)?;
 
     protocol::read_frame(&mut client)
@@ -83,9 +83,7 @@ pub fn describe_error_code(code: i32) -> &'static str {
 
 /// Parse a JSON-RPC response value into `(result, error_code)`.
 /// Exactly one of the two is `Some`.
-pub fn split_response(
-    value: serde_json::Value,
-) -> (Option<serde_json::Value>, Option<i32>) {
+pub fn split_response(value: serde_json::Value) -> (Option<serde_json::Value>, Option<i32>) {
     if let Some(err) = value.get("error") {
         let code = err
             .get("code")
@@ -134,7 +132,10 @@ mod tests {
     fn describe_error_known_codes() {
         assert_eq!(describe_error_code(code::SESSION_LOCKED), "vault is locked");
         assert_eq!(describe_error_code(code::UNAUTHORIZED), "auth failed");
-        assert_eq!(describe_error_code(code::DECRYPTION_FAILED), "wrong password");
+        assert_eq!(
+            describe_error_code(code::DECRYPTION_FAILED),
+            "wrong password"
+        );
     }
 
     #[test]

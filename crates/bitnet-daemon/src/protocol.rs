@@ -275,12 +275,15 @@ pub fn read_frame<R: Read>(r: &mut R) -> io::Result<serde_json::Value> {
 /// Write a length-prefixed JSON frame to `w`. The frame is
 /// exactly 4 bytes of big-endian length followed by the UTF-8 body.
 pub fn write_frame<W: Write>(w: &mut W, body: &serde_json::Value) -> io::Result<()> {
-    let bytes = serde_json::to_vec(body)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let bytes =
+        serde_json::to_vec(body).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if bytes.len() > MAX_PAYLOAD {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("payload {} bytes exceeds {MAX_PAYLOAD} byte limit", bytes.len()),
+            format!(
+                "payload {} bytes exceeds {MAX_PAYLOAD} byte limit",
+                bytes.len()
+            ),
         ));
     }
     let len = (bytes.len() as u32).to_be_bytes();

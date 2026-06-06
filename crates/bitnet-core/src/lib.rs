@@ -410,10 +410,7 @@ pub struct EntrySummary {
     pub has_totp: bool,
 }
 
-fn serialize_uuid_hex<S: serde::Serializer>(
-    uuid: &[u8; 16],
-    s: S,
-) -> Result<S::Ok, S::Error> {
+fn serialize_uuid_hex<S: serde::Serializer>(uuid: &[u8; 16], s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&util::hex_encode(uuid))
 }
 

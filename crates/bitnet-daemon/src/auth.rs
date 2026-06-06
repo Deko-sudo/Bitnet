@@ -53,12 +53,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// Verify a request's `auth` field against the expected HMAC.
 /// Returns `true` if the auth matches, `false` otherwise.
-pub fn verify_request(
-    key: &[u8],
-    method: &str,
-    params_json: &[u8],
-    presented_auth: &str,
-) -> bool {
+pub fn verify_request(key: &[u8], method: &str, params_json: &[u8], presented_auth: &str) -> bool {
     let expected = sign_request(key, method, params_json);
     constant_time_eq(&expected, presented_auth)
 }

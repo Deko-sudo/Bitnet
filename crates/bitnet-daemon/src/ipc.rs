@@ -21,7 +21,6 @@
 //!   is finalised. See `docs/PHASE_3_DESIGN.md` for the full
 //!   design and integration steps.
 
-
 #[cfg(unix)]
 mod imp {
     use std::io;
@@ -536,8 +535,8 @@ mod tests {
         let server = Server::bind().expect("bind");
         let mut client = Client::connect().expect("connect");
         server.accept().expect("accept"); // blocks; client must be ready
-        // We do not actually use the accepted conn here — this
-        // test is intentionally minimal to keep CI fast.
+                                          // We do not actually use the accepted conn here — this
+                                          // test is intentionally minimal to keep CI fast.
         drop(client);
         drop(server);
     }

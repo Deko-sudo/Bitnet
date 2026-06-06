@@ -273,10 +273,7 @@ pub fn dispatch<S: VaultService>(
 
 /// Helper: convert a service `Result<Value, i32>` into the
 /// JSON-RPC response envelope.
-fn service_method(
-    id: u64,
-    result: Result<serde_json::Value, i32>,
-) -> serde_json::Value {
+fn service_method(id: u64, result: Result<serde_json::Value, i32>) -> serde_json::Value {
     match result {
         Ok(value) => make_ok(id, value),
         Err(code) => make_err(id, code, error_message_for_code(code)),

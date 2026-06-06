@@ -95,11 +95,9 @@ mod tests {
             .spawn(move || loop {
                 match server.accept() {
                     Ok(mut conn) => {
-                        if let Err(e) = bitnet_daemon::handle_one_in_memory(
-                            &state_for_thread,
-                            &svc,
-                            &mut conn,
-                        ) {
+                        if let Err(e) =
+                            bitnet_daemon::handle_one_in_memory(&state_for_thread, &svc, &mut conn)
+                        {
                             eprintln!("daemon thread: client dispatch failed: {e}");
                         }
                     }
@@ -262,29 +260,21 @@ mod tests {
         assert!(state.lock().unwrap().has_token());
 
         // 2. is_unlocked with the returned token.
-        let is_resp = roundtrip(
-            &pipe,
-            Some(&token),
-            "is_unlocked",
-            serde_json::json!({}),
-        );
+        let is_resp = roundtrip(&pipe, Some(&token), "is_unlocked", serde_json::json!({}));
         assert_eq!(is_resp["result"]["unlocked"], true);
 
         // 3. list_entries — NoopVaultService rejects with
         //    UNKNOWN_METHOD; we just verify the dispatch path
         //    executed (i.e. we got a response at all, with a
         //    valid error code, and that auth passed).
-        let list_resp = roundtrip(
-            &pipe,
-            Some(&token),
-            "list_entries",
-            serde_json::json!({}),
+        let list_resp = roundtrip(&pipe, Some(&token), "list_entries", serde_json::json!({}));
+        assert_eq!(
+            list_resp["error"]["code"],
+            bitnet_daemon::code::UNKNOWN_METHOD
         );
-        assert_eq!(list_resp["error"]["code"], bitnet_daemon::code::UNKNOWN_METHOD);
 
         // 4. Lock with the same token.
-        let lock_resp =
-            roundtrip(&pipe, Some(&token), "lock", serde_json::json!({}));
+        let lock_resp = roundtrip(&pipe, Some(&token), "lock", serde_json::json!({}));
         assert_eq!(lock_resp["result"]["ok"], true);
 
         // State should now be locked.
@@ -292,12 +282,7 @@ mod tests {
 
         // 5. Subsequent request without the token (or with
         //    the now-invalid token) should fail.
-        let is_resp2 = roundtrip(
-            &pipe,
-            Some(&token),
-            "is_unlocked",
-            serde_json::json!({}),
-        );
+        let is_resp2 = roundtrip(&pipe, Some(&token), "is_unlocked", serde_json::json!({}));
         // The token bytes still exist but the daemon has
         // dropped them; the HMAC was computed over the
         // CURRENT daemon token, not the cached client one.
@@ -347,8 +332,7 @@ mod tests {
         assert_eq!(ping_b["result"]["pong"], true);
 
         // Client A locks.
-        let lock_a =
-            roundtrip(&pipe, Some(&token), "lock", serde_json::json!({}));
+        let lock_a = roundtrip(&pipe, Some(&token), "lock", serde_json::json!({}));
         assert_eq!(lock_a["result"]["ok"], true);
 
         // State is now locked.
@@ -367,7 +351,12 @@ mod tests {
     #[test]
     fn unknown_method_returns_error_envelope() {
         let (_shutdown, _state, pipe) = spawn_daemon();
-        let resp = roundtrip(&pipe, None, "definitely_not_a_method", serde_json::json!({}));
+        let resp = roundtrip(
+            &pipe,
+            None,
+            "definitely_not_a_method",
+            serde_json::json!({}),
+        );
         assert_eq!(resp["error"]["code"], bitnet_daemon::code::UNKNOWN_METHOD);
     }
 

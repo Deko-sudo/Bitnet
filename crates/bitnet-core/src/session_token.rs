@@ -31,11 +31,10 @@ impl SessionToken {
 
     #[cfg(feature = "dpapi")]
     pub fn decrypt(blob: &[u8]) -> Result<Self, CoreError> {
-        let plaintext =
-            dpapi_unprotect(blob).map_err(|e| {
-                tracing::error!(error = %e, "DPAPI unprotect failed");
-                CoreError::SessionLocked
-            })?;
+        let plaintext = dpapi_unprotect(blob).map_err(|e| {
+            tracing::error!(error = %e, "DPAPI unprotect failed");
+            CoreError::SessionLocked
+        })?;
         Self::deserialize(&plaintext)
     }
 

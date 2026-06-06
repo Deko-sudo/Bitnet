@@ -63,7 +63,10 @@ impl LockedString {
         let bytes = s.as_bytes();
         let mut buf = LockedBuffer::new(bytes.len())?;
         buf.as_mut_slice().copy_from_slice(bytes);
-        Some(Self { buf, len: bytes.len() })
+        Some(Self {
+            buf,
+            len: bytes.len(),
+        })
     }
 
     pub fn as_str(&self) -> &str {
