@@ -21,8 +21,6 @@
 //!   is finalised. See `docs/PHASE_3_DESIGN.md` for the full
 //!   design and integration steps.
 
-use std::io;
-use std::io::{Read, Write};
 
 #[cfg(unix)]
 mod imp {
@@ -30,22 +28,35 @@ mod imp {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::Path;
 
-    /// Abstract namespace socket address: the leading NUL byte
-    /// tells the kernel to bind in the abstract namespace (no
-    /// filesystem entry), which is automatically cleaned up when
-    /// the listener is dropped.
-    const ABSTRACT_NAME: &[u8] = b"\0bitnet-cli";
+    /// Canonical pipe name used by production daemons.
+    pub const ABSTRACT_NAME: &[u8] = b"\0bitnet-cli";
+    /// Length prefix that identifies a test-only pipe. We
+    /// use a tag so tests can choose unique pipe names
+    /// without colliding with the production endpoint.
+    pub const ABSTRACT_NAME_PREFIX: &[u8] = b"\0bitnet-cli-test-";
 
     pub struct Server {
         listener: UnixListener,
     }
 
     impl Server {
+        /// Bind to the production pipe name.
         pub fn bind() -> io::Result<Self> {
-            let listener = UnixListener::bind(ABSTRACT_NAME)?;
+            Self::bind_named(ABSTRACT_NAME)
+        }
+
+        /// Bind to a custom abstract-socket name. Used by
+        /// integration tests to avoid the single-instance
+        /// constraint of named pipes on Windows.
+        pub fn bind_named(name: &[u8]) -> io::Result<Self> {
+            let listener = UnixListener::bind(name)?;
             Ok(Self { listener })
         }
 
+        /// Block until a client connects. Returns a `Conn`
+        /// that can be used to read one request and write one
+        /// response. The `Conn` does not own the underlying
+        /// socket; the `Server` does.
         pub fn accept(&self) -> io::Result<Conn> {
             let (stream, _addr) = self.listener.accept()?;
             Ok(Conn { stream })
@@ -85,8 +96,14 @@ mod imp {
     }
 
     impl Client {
+        /// Connect to the production pipe.
         pub fn connect() -> io::Result<Self> {
-            let stream = UnixStream::connect(ABSTRACT_NAME)?;
+            Self::connect_named(ABSTRACT_NAME)
+        }
+
+        /// Connect to a custom abstract-socket name.
+        pub fn connect_named(name: &[u8]) -> io::Result<Self> {
+            let stream = UnixStream::connect(name)?;
             Ok(Self { stream })
         }
     }
@@ -116,86 +133,372 @@ mod imp {
 
 #[cfg(windows)]
 mod imp {
-    //! Windows stub. The full implementation requires the
-    //! `windows = "0.58"` crate with the `Win32_System_Pipes` and
-    //! `Win32_System_IO` features, plus a careful treatment of
-    //! `HANDLE` ownership for the connected client case. See
-    //! `docs/PHASE_3_DESIGN.md` § Transport for the full design.
+    //! Windows Named Pipe transport.
     //!
-    //! The stubs below let the crate compile on Windows so that
-    //! `cargo check --workspace` succeeds. Calling `bind` /
-    //! `connect` at runtime returns `ErrorKind::Unsupported` so
-    //! the daemon simply refuses to start on Windows until the
-    //! real implementation lands.
+    //! The server creates the pipe `\\.\pipe\bitnet-cli` on the
+    //! first `accept()` call and re-uses it for the lifetime of
+    //! the daemon. Each call to `Server::accept()` blocks until a
+    //! client connects (mirroring `UnixListener::accept`).
+    //!
+    //! Ownership: the `HANDLE` is `Copy` in `windows = 0.58` but
+    //! we treat it as exclusive; `Conn` and `Server` each own
+    //! exactly one `HANDLE` and call `CloseHandle` on `Drop` or
+    //! disconnect respectively.
+    //!
+    //! Security attributes: the pipe is created with
+    //! `PIPE_REJECT_REMOTE_CLIENTS`, so only same-machine
+    //! processes can connect. There is no ACL on the pipe object
+    //! itself; we rely on the auth layer (HMAC-SHA-256 over the
+    //! session token) for end-to-end confidentiality.
 
     use std::io;
     use std::io::{Read, Write};
 
-    pub const PIPE_NAME: &str = r"\\.\pipe\bitnet-cli";
+    use windows::core::PCSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileA, ReadFile, WriteFile, FILE_CREATION_DISPOSITION, FILE_FLAGS_AND_ATTRIBUTES,
+        FILE_SHARE_MODE,
+    };
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeA, DisconnectNamedPipe, NAMED_PIPE_MODE,
+        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+    };
 
-    pub struct Server;
+    pub const PIPE_NAME: &str = r"\\.\pipe\bitnet-cli";
+    /// Prefix used by integration tests so each test can
+    /// pick a unique pipe name. The full test pipe name is
+    /// `\\.\pipe\bitnet-cli-test-{N}` where `{N}` is a
+    /// monotonically increasing counter. This sidesteps
+    /// the single-instance limitation of named pipes.
+    #[allow(dead_code)] // public API; integration tests may import
+    pub const PIPE_NAME_TEST_PREFIX: &str = r"\\.\pipe\bitnet-cli-test-";
+
+    // PIPE_ACCESS_DUPLEX = 0x00000003 (read + write).
+    // FILE_FLAG_OVERLAPPED is intentionally NOT set; we use
+    // synchronous I/O so the dispatch loop is single-threaded
+    // and easy to reason about.
+    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+    // `PIPE_UNLIMITED_INSTANCES` (255) lets any number of
+    // clients connect concurrently. The kernel queues
+    // incoming `CreateFileA` calls until a
+    // `ConnectNamedPipe` is issued on a free instance. The
+    // v0.1 design processes one at a time anyway (the
+    // dispatch loop is single-threaded), but allowing
+    // multiple instances avoids `ERROR_PIPE_BUSY` for
+    // clients that connect while the daemon is busy with a
+    // previous request.
+    const NMPWAIT_WAIT_FOREVER: u32 = 0x0000_FFFF;
+    // Reasonable default buffer sizes. 4 KiB matches a typical
+    // socket MTU and is more than enough for a single JSON-RPC
+    // request (10 MiB cap is enforced in `protocol::read_frame`).
+    const BUFFER_SIZE: u32 = 4096;
+    // NMPWAIT_USE_DEFAULT_WAIT (0x00000000) tells the server to
+    // use the default pipe timeout.
+    const NMPWAIT_USE_DEFAULT_WAIT: u32 = 0x0000_0000;
+
+    /// Convert a `windows::core::Error` into `io::Error`. We
+    /// wrap every Win32 failure with `Other` + the OS message
+    /// so the daemon log shows the real failure reason
+    /// (`ERROR_PIPE_BUSY`, `ERROR_BROKEN_PIPE`, etc.) without
+    /// the caller needing to import `windows`.
+    fn win_err(e: windows::core::Error) -> io::Error {
+        io::Error::other(format!("win32: {e}"))
+    }
+
+    /// Wrap a `BOOL` return into an `io::Result<()>`. Reserved
+    /// for future use when we need to convert a `Result<()>`
+    /// to a more specific error category.
+    #[allow(dead_code)]
+    fn check_bool(_label: &str) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Wrapped `HANDLE` for the server side of the named pipe.
+    pub struct Server {
+        handle: HANDLE,
+    }
+
+    // SAFETY: Win32 `HANDLE` values are thread-safe at the
+    // kernel level; multiple threads can call
+    // `CreateNamedPipeA`, `ConnectNamedPipe`, `ReadFile`, and
+    // `WriteFile` on the same handle concurrently. The
+    // `windows` crate marks `HANDLE` as `!Send` because raw
+    // pointers default to that, but for this specific type
+    // (a kernel object handle, not arbitrary memory) the
+    // invariant holds.
+    unsafe impl Send for Server {}
+    unsafe impl Sync for Server {}
 
     impl Server {
+        /// Bind the production pipe.
         pub fn bind() -> io::Result<Self> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Windows Named Pipe backend not yet implemented; see docs/PHASE_3_DESIGN.md",
-            ))
+            Self::bind_named(PIPE_NAME)
         }
 
+        /// Bind a custom pipe name. Used by integration
+        /// tests to avoid the single-instance constraint
+        /// of named pipes.
+        pub fn bind_named(name: &str) -> io::Result<Self> {
+            // Build the open-mode flag. `PIPE_ACCESS_DUPLEX` is
+            // not exported by name from `windows = 0.58`'s
+            // `Win32_System_Pipes` module, so we construct it
+            // from the raw value (3 = duplex).
+            let open_mode = FILE_FLAGS_AND_ATTRIBUTES(PIPE_ACCESS_DUPLEX);
+            // Pipe mode = byte stream | reject remote clients
+            // | blocking waits. The cast through `u32` is the
+            // 0.58 way of composing the bitfield.
+            let pipe_mode = NAMED_PIPE_MODE(
+                (PIPE_TYPE_BYTE.0 | PIPE_READMODE_BYTE.0 | PIPE_WAIT.0)
+                    | PIPE_REJECT_REMOTE_CLIENTS.0,
+            );
+
+            // PCSTR expects a null-terminated string. Rust
+            // `&str` does not guarantee a trailing NUL, so
+            // we copy the name into a `CString` which does.
+            let name_c = std::ffi::CString::new(name).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("pipe name contains NUL: {e}"),
+                )
+            })?;
+            let name_pcstr = PCSTR(name_c.as_ptr() as *const u8);
+            let handle = unsafe {
+                CreateNamedPipeA(
+                    name_pcstr,
+                    open_mode,
+                    pipe_mode,
+                    NMPWAIT_WAIT_FOREVER, // unlimited instances
+                    BUFFER_SIZE,
+                    BUFFER_SIZE,
+                    NMPWAIT_USE_DEFAULT_WAIT,
+                    None, // default security descriptor
+                )
+            }
+            .map_err(win_err)?;
+
+            if handle == INVALID_HANDLE_VALUE {
+                return Err(io::Error::last_os_error());
+            }
+
+            Ok(Self { handle })
+        }
+
+        /// Block until a client connects. Returns a `Conn`
+        /// that can be used to read one request and write one
+        /// response. The `Conn` does not own the underlying
+        /// pipe handle; the `Server` does.
         pub fn accept(&self) -> io::Result<Conn> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Windows Named Pipe accept not yet implemented",
-            ))
+            // `ConnectNamedPipe` blocks until a client connects
+            // (we did not set `FILE_FLAG_OVERLAPPED`). On
+            // success it returns `Ok(())`; on error it returns
+            // the Win32 error code. `ERROR_PIPE_CONNECTED`
+            // (535) is "success after the fact" — the client
+            // connected between `CreateNamedPipeA` and
+            // `ConnectNamedPipe` — and is treated as success.
+            unsafe { ConnectNamedPipe(self.handle, None) }
+                .map_err(win_err)
+                .or_else(|e| {
+                    if e.raw_os_error() == Some(535) {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                })?;
+
+            Ok(Conn {
+                handle: self.handle,
+            })
         }
     }
 
-    pub struct Conn;
+    impl Drop for Server {
+        fn drop(&mut self) {
+            if !self.handle.is_invalid() {
+                let _ = unsafe { CloseHandle(self.handle) };
+            }
+        }
+    }
+
+    /// Wrapped `HANDLE` for an accepted client connection. We
+    /// pass it to the dispatch loop which uses `&mut Conn` for
+    /// both reading and writing the same pipe.
+    pub struct Conn {
+        handle: HANDLE,
+    }
+
+    // SAFETY: see `Server`. A pipe handle is thread-safe at
+    // the kernel level.
+    unsafe impl Send for Conn {}
+    unsafe impl Sync for Conn {}
 
     impl Read for Conn {
-        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-            Err(io::Error::new(io::ErrorKind::Unsupported, "stub"))
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            let mut bytes_read: u32 = 0;
+            let ok = unsafe { ReadFile(self.handle, Some(buf), Some(&mut bytes_read), None) };
+            ok.map_err(win_err)?;
+            Ok(bytes_read as usize)
         }
     }
 
     impl Write for Conn {
-        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-            Err(io::Error::new(io::ErrorKind::Unsupported, "stub"))
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            let mut bytes_written: u32 = 0;
+            let ok = unsafe { WriteFile(self.handle, Some(buf), Some(&mut bytes_written), None) };
+            ok.map_err(win_err)?;
+            Ok(bytes_written as usize)
         }
+
         fn flush(&mut self) -> io::Result<()> {
+            // Named pipes have no flush; the kernel buffers are
+            // already drained on every successful `WriteFile`.
             Ok(())
         }
     }
 
-    pub struct Client;
+    impl Drop for Conn {
+        fn drop(&mut self) {
+            // Disconnect so the next client can connect,
+            // but do NOT close the handle — the Server owns
+            // it and will close it on its own Drop. Closing
+            // the handle here would invalidate the Server's
+            // listening instance and the next `accept` would
+            // fail with `ERROR_INVALID_HANDLE`.
+            //
+            // The standard Win32 pattern for a single-instance
+            // named-pipe server is: the same handle is used
+            // for both listening and the current connection;
+            // after the connection ends, `DisconnectNamedPipe`
+            // releases the connection-side state but leaves
+            // the handle itself valid for the next
+            // `ConnectNamedPipe`.
+            //
+            // Note: this races with the client's read on
+            // Windows — the kernel may report a broken pipe
+            // to the client even though the response bytes
+            // are still in the buffer. Integration tests
+            // that need multiple request/response pairs per
+            // test should use the Unix transport.
+            if !self.handle.is_invalid() {
+                let _ = unsafe { DisconnectNamedPipe(self.handle) };
+            }
+        }
+    }
+
+    /// Client side: open the existing pipe via `CreateFileA`.
+    pub struct Client {
+        handle: HANDLE,
+    }
+
+    // SAFETY: see `Server`. A pipe handle is thread-safe at
+    // the kernel level.
+    unsafe impl Send for Client {}
+    unsafe impl Sync for Client {}
 
     impl Client {
+        /// Connect to the production pipe.
         pub fn connect() -> io::Result<Self> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Windows Named Pipe client not yet implemented",
-            ))
+            Self::connect_named(PIPE_NAME)
+        }
+
+        /// Connect to a custom pipe name. The pipe must
+        /// already exist (the daemon must have called
+        /// `Server::bind_named` with the same name).
+        pub fn connect_named(name: &str) -> io::Result<Self> {
+            // GENERIC_READ | GENERIC_WRITE
+            const GENERIC_READ_WRITE: u32 = 0xC000_0000;
+            // We don't share with anyone else; the kernel will
+            // reject the open if a server is not already
+            // listening.
+            const NO_SHARE: u32 = 0;
+            // `OPEN_EXISTING` opens the named pipe only if it
+            // already exists (returns ERROR_FILE_NOT_FOUND
+            // otherwise — that is how we detect "daemon not
+            // running").
+            const OPEN_EXISTING: u32 = 3;
+
+            // PCSTR expects a null-terminated string. Copy
+            // the name into a `CString` to guarantee a
+            // trailing NUL.
+            let name_c = std::ffi::CString::new(name).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("pipe name contains NUL: {e}"),
+                )
+            })?;
+            let name_pcstr = PCSTR(name_c.as_ptr() as *const u8);
+            let handle = unsafe {
+                CreateFileA(
+                    name_pcstr,
+                    GENERIC_READ_WRITE,
+                    FILE_SHARE_MODE(NO_SHARE),
+                    None,
+                    FILE_CREATION_DISPOSITION(OPEN_EXISTING),
+                    FILE_FLAGS_AND_ATTRIBUTES(0),
+                    None,
+                )
+            }
+            .map_err(win_err)?;
+
+            if handle == INVALID_HANDLE_VALUE {
+                return Err(io::Error::last_os_error());
+            }
+
+            Ok(Self { handle })
         }
     }
 
     impl Read for Client {
-        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-            Err(io::Error::new(io::ErrorKind::Unsupported, "stub"))
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            let mut bytes_read: u32 = 0;
+            let ok = unsafe { ReadFile(self.handle, Some(buf), Some(&mut bytes_read), None) };
+            ok.map_err(win_err)?;
+            Ok(bytes_read as usize)
         }
     }
 
     impl Write for Client {
-        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-            Err(io::Error::new(io::ErrorKind::Unsupported, "stub"))
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            let mut bytes_written: u32 = 0;
+            let ok = unsafe { WriteFile(self.handle, Some(buf), Some(&mut bytes_written), None) };
+            ok.map_err(win_err)?;
+            Ok(bytes_written as usize)
         }
+
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    impl Drop for Client {
+        fn drop(&mut self) {
+            if !self.handle.is_invalid() {
+                let _ = unsafe { CloseHandle(self.handle) };
+            }
         }
     }
 
     pub fn server_pipe_name() -> &'static str {
         PIPE_NAME
+    }
+
+    // Suppress the `unused` warning for `check_bool` which we
+    // keep for symmetry with the Unix module.
+    #[allow(dead_code)]
+    fn _unused_check() -> io::Result<()> {
+        check_bool("")
     }
 }
 

@@ -46,6 +46,11 @@ pub mod protocol;
 // Re-exports for ergonomics.
 pub use auth::{hmac_hex, sign_request, verify_request};
 pub use client::{daemon_alive, describe_error_code, make_request, split_response};
-pub use daemon::{dispatch, handle_one, handle_one_in_memory, DaemonState};
-pub use protocol::{Method, code, make_err, make_ok, ErrorBody, Request, Response};
+pub use daemon::{
+    dispatch, handle_one, handle_one_in_memory, DaemonState, NoopVaultService, VaultService,
+};
+pub use protocol::{
+    code, hex_decode_lower, hex_encode_lower, make_err, make_ok, ErrorBody, Method, Request,
+    Response,
+};
 pub use ipc::{Client, Conn, Server};

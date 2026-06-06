@@ -32,6 +32,73 @@ use serde::{Deserialize, Serialize};
 /// this are rejected with `OVERSIZED` before they are deserialised.
 pub const MAX_PAYLOAD: usize = 10 * 1024 * 1024;
 
+/// Lower-case hex encoding of a byte slice. Used to render
+/// binary tokens (and other small fixed-size fields) in the
+/// JSON-RPC payload.
+pub fn hex_encode_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Decode a lower-case hex string into bytes. Returns `None` if
+/// the input length is not even, contains non-hex characters, or
+/// would overflow a `Vec<u8>` of length `len/2`. Used to parse
+/// the `token_hex` field returned by the `unlock` method.
+pub fn hex_decode_lower(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    for i in (0..bytes.len()).step_by(2) {
+        let hi = hex_nibble(bytes[i])?;
+        let lo = hex_nibble(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod hex_tests {
+    use super::*;
+
+    #[test]
+    fn hex_roundtrip_empty() {
+        assert_eq!(hex_encode_lower(&[]), "");
+        assert_eq!(hex_decode_lower(""), Some(vec![]));
+    }
+
+    #[test]
+    fn hex_roundtrip_typical() {
+        let bytes = [0u8, 1, 15, 16, 255];
+        let s = hex_encode_lower(&bytes);
+        assert_eq!(s, "00010f10ff");
+        assert_eq!(hex_decode_lower(&s), Some(bytes.to_vec()));
+    }
+
+    #[test]
+    fn hex_decode_rejects_odd_length() {
+        assert_eq!(hex_decode_lower("abc"), None);
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_hex() {
+        assert_eq!(hex_decode_lower("zz"), None);
+    }
+}
+
 /// Error codes returned by the daemon in JSON-RPC `error.code`.
 /// Negative numbers mirror JSON-RPC 2.0 conventions and
 /// BitNet-specific codes.
@@ -90,6 +157,7 @@ impl Method {
     /// Parse a method name from a string. Returns `None` for
     /// unknown names; the caller is expected to reply with
     /// `code::UNKNOWN_METHOD`.
+    #[allow(clippy::should_implement_trait)] // not a `FromStr` impl
     pub fn from_str(s: &str) -> Option<Self> {
         Some(match s {
             "ping" => Method::Ping,

@@ -148,12 +148,22 @@ fn main() {
             };
             let state = bitnet_daemon::DaemonState::new();
             let state = std::sync::Mutex::new(state);
+            // The production service wires the daemon to a real
+            // bitnet_core::SessionManager; for now we use a
+            // NoopVaultService that allows `unlock` to succeed
+            // (returning a deterministic test token) but rejects
+            // every other method with UNKNOWN_METHOD. This is
+            // the intended v0.1 wiring: the daemon is reachable
+            // and the protocol is end-to-end correct, while
+            // service-level handlers are filled in follow-up
+            // commits.
+            let service = bitnet_daemon::NoopVaultService;
             info!("bitnet-cli daemon listening");
             loop {
                 match server.accept() {
                     Ok(mut conn) => {
                         if let Err(_e) =
-                            bitnet_daemon::handle_one_in_memory(&state, &mut conn)
+                            bitnet_daemon::handle_one_in_memory(&state, &service, &mut conn)
                         {
                             error!(op = "daemon", kind = "Error", "client dispatch failed");
                         }
