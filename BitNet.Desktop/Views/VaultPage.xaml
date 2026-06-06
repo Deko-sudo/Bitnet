@@ -18,25 +18,47 @@
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            
+
             <AutoSuggestBox x:Name="SearchBox"
                             PlaceholderText="Search entries..."
                             QueryIcon="Find"
                             TextChanged="SearchBox_TextChanged"
                             VerticalAlignment="Center"/>
-            
-            <Button Grid.Column="1"
+
+            <!-- Bitwarden-style type filter. Each
+                 ComboBoxItem's Tag is a kind identifier
+                 that the code-behind maps onto a
+                 category. "all" disables the kind
+                 filter; the other tags match the JSON
+                 `kind` field from the Rust core. -->
+            <ComboBox x:Name="TypeFilter"
+                      Grid.Column="1"
+                      SelectedIndex="0"
+                      SelectionChanged="TypeFilter_SelectionChanged"
+                      Margin="12,0,0,0"
+                      MinWidth="140"
+                      VerticalAlignment="Center">
+                <ComboBoxItem Content="All" Tag="all"/>
+                <ComboBoxItem Content="Logins" Tag="login"/>
+                <ComboBoxItem Content="Cards" Tag="card"/>
+                <ComboBoxItem Content="Identities" Tag="identity"/>
+                <ComboBoxItem Content="Notes" Tag="note"/>
+                <ComboBoxItem Content="SSH keys" Tag="ssh"/>
+            </ComboBox>
+
+            <Button Grid.Column="2"
                     Content="Refresh"
                     Click="Refresh_Click"
                     Margin="12,0,0,0"></Button>
-            
-            <Button Grid.Column="2"
+
+            <Button Grid.Column="3"
                     Content="Save Vault"
                     Click="SaveVault_Click"
                     Margin="12,0,0,0"></Button>
-            
-            <Button Grid.Column="3"
+
+            <Button Grid.Column="4"
                     Content="Add Entry"
                     Click="AddEntry_Click"
                     Margin="12,0,0,0"

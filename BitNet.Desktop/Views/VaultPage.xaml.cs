@@ -2,7 +2,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using BitNet.Desktop.Helpers;
@@ -20,6 +22,17 @@ namespace BitNet.Desktop.Views
         // are now handled by `ClipboardHelper`. The deadline
         // tracking and tick that used to live here have been
         // moved to that helper.
+
+        // Filter state for the Bitwarden-style
+        // type filter. The current selection is one of
+        // the strings in `AllFilters` below. The
+        // collection view applies this filter on
+        // top of the search box's text filter.
+        public string CurrentFilter { get; set; } = "all";
+        public static readonly string[] AllFilters =
+        {
+            "all", "login", "card", "identity", "note", "ssh"
+        };
 
         public VaultPage()
         {
@@ -47,7 +60,13 @@ namespace BitNet.Desktop.Views
                     {
                         foreach (var entry in entries)
                         {
-                            entry.IconGlyph = GetIconForUrl(entry.Url);
+                            // Prefer the structured kind
+                            // (set by the Rust core) and
+                            // fall back to the URL-based
+                            // heuristic for entries that
+                            // don't have a `kind` field
+                            // (v0.1 back-compat).
+                            entry.IconGlyph = ResolveIcon(entry);
                             Entries.Add(entry);
                         }
                     }
@@ -57,7 +76,33 @@ namespace BitNet.Desktop.Views
             {
                 BitnetCore.bitnet_free_string(ptr);
             }
-            CountLabel.Text = $"{Entries.Count} entries";
+            // Re-apply the active filter so a fresh
+            // load preserves the user's selection.
+            ApplyFilters();
+            CountLabel.Text = $"{(EntriesList.ItemsSource as IEnumerable<VaultEntry>)?.Count() ?? Entries.Count} entries";
+        }
+
+        private static string ResolveIcon(VaultEntry entry)
+        {
+            // If the Rust core tagged the entry with a
+            // non-default kind, use EntryTypeIcons for
+            // a consistent glyph. Otherwise the URL
+            // heuristic is a reasonable fallback.
+            if (!string.IsNullOrEmpty(entry.Kind)
+                && !string.Equals(entry.Kind, "login", StringComparison.OrdinalIgnoreCase))
+            {
+                var kind = entry.Kind.ToLowerInvariant() switch
+                {
+                    "card" or "creditcard" or "credit_card" => EntryKind.CreditCard,
+                    "note" or "securenote" or "secure_note" => EntryKind.SecureNote,
+                    "identity" => EntryKind.Identity,
+                    "ssh" or "sshkey" or "ssh_key" => EntryKind.SshKey,
+                    "wifi" => EntryKind.Wifi,
+                    _ => EntryKind.Login,
+                };
+                return EntryTypeIcons.Glyph(kind);
+            }
+            return GetIconForUrl(entry.Url);
         }
 
         private static string GetIconForUrl(string url)
@@ -74,14 +119,63 @@ namespace BitNet.Desktop.Views
 
         private void SearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
         {
-            var filter = SearchBox.Text.ToLowerInvariant();
-            EntriesList.ItemsSource = string.IsNullOrEmpty(filter)
-                ? Entries
-                : new ObservableCollection<VaultEntry>(
-                    System.Linq.Enumerable.Where(Entries, en =>
-                        en.Title.ToLowerInvariant().Contains(filter) ||
-                        en.Username.ToLowerInvariant().Contains(filter) ||
-                        en.Url.ToLowerInvariant().Contains(filter)));
+            ApplyFilters();
+        }
+
+        /// <summary>
+        /// Bitwarden-style filter pipeline: filter the
+        /// master `Entries` collection by the active
+        /// type filter (CurrentFilter) and the search
+        /// box's text, then assign the result to
+        /// ListView.ItemsSource. The count label is
+        /// updated to reflect the visible total.
+        /// </summary>
+        private void ApplyFilters()
+        {
+            var search = SearchBox?.Text?.ToLowerInvariant() ?? string.Empty;
+            var kindFilter = CurrentFilter ?? "all";
+            var filtered = Entries.Where(en =>
+                (kindFilter == "all" || MatchesKind(en, kindFilter))
+                && (string.IsNullOrEmpty(search)
+                    || (en.Title?.ToLowerInvariant().Contains(search) ?? false)
+                    || (en.Username?.ToLowerInvariant().Contains(search) ?? false)
+                    || (en.Url?.ToLowerInvariant().Contains(search) ?? false)))
+                .ToList();
+            EntriesList.ItemsSource = filtered;
+            if (CountLabel != null)
+            {
+                CountLabel.Text = filtered.Count == 1 ? "1 entry" : $"{filtered.Count} entries";
+            }
+        }
+
+        private static bool MatchesKind(VaultEntry entry, string filter)
+        {
+            var k = (entry.Kind ?? "login").ToLowerInvariant();
+            return filter switch
+            {
+                "all" => true,
+                "login" => k == "login" || k == "ssh" || k == "wifi",
+                "card" => k == "card" || k == "creditcard" || k == "credit_card",
+                "identity" => k == "identity",
+                "note" => k == "note" || k == "securenote" || k == "secure_note",
+                "ssh" => k == "ssh" || k == "sshkey" || k == "ssh_key",
+                _ => true,
+            };
+        }
+
+        /// <summary>
+        /// Event handler for the type-filter ComboBox
+        /// (Bitwarden-style "All / Login / Card /
+        /// Identity / Note"). Reads the SelectedItem
+        /// Tag and updates CurrentFilter.
+        /// </summary>
+        private void TypeFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is ComboBox cb && cb.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            {
+                CurrentFilter = tag;
+                ApplyFilters();
+            }
         }
 
         private void EntriesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -279,6 +373,14 @@ namespace BitNet.Desktop.Views
         public string Url { get; set; } = "";
         [System.Text.Json.Serialization.JsonPropertyName("has_totp")]
         public bool HasTOTP { get; set; }
+        /// <summary>
+        /// Entry kind: "login", "note", "card",
+        /// "identity", etc. Set by the Rust core on
+        /// v0.2; for now defaults to "login" if the
+        /// field is missing from the JSON.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("kind")]
+        public string Kind { get; set; } = "login";
         public string IconGlyph { get; set; } = "\uE8D7";
     }
 }
