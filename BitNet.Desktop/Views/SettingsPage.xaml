@@ -14,8 +14,8 @@
             
             <!-- Security Section -->
             <Grid Padding="20"
-                   Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                   CornerRadius="8">
+                  Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                  CornerRadius="8">
                 <StackPanel Spacing="16">
                     <TextBlock Text="Security"
                                Style="{StaticResource SubtitleTextBlockStyle}">
@@ -23,37 +23,62 @@
                             <TransitionCollection/>
                         </TextBlock.Transitions>
                     </TextBlock>
-                    
+
                     <ToggleSwitch x:Name="AutoLockToggle"
                                   Header="Auto-lock after inactivity"
-                                  IsOn="True">
+                                  IsOn="True"
+                                  Toggled="AutoLockToggle_Toggled">
                         <ToggleSwitch.Transitions>
                             <TransitionCollection/>
                         </ToggleSwitch.Transitions>
                     </ToggleSwitch>
-                    
-                    <Slider x:Name="AutoLockSlider"
-                             Header="Auto-lock timeout (minutes)"
-                             Minimum="1"
-                             Maximum="30"
-                             Value="5"
-                             StepFrequency="1"
-                             TickFrequency="5"
-                             TickPlacement="Outside"
-                             ValueChanged="AutoLockSlider_ValueChanged"/>
-                    
-                    <TextBlock x:Name="AutoLockValueLabel"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+
+                    <TextBlock Text="Auto-lock timeout"
+                               Style="{StaticResource BodyStrongTextBlockStyle}"
+                               Margin="0,8,0,0">
                         <TextBlock.Transitions>
                             <TransitionCollection/>
                         </TextBlock.Transitions>
                     </TextBlock>
-                    
+
+                    <TextBlock Text="The vault will lock after this period of inactivity. We recommend 15 minutes — long enough for a normal session, short enough that a forgotten laptop isn't a breach."
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,-8,0,0">
+                        <TextBlock.Transitions>
+                            <TransitionCollection/>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+
+                    <!-- Bitwarden-style discrete timeout options. -->
+                    <!-- A ComboBox gives clearer affordance than -->
+                    <!-- the previous continuous Slider; users can -->
+                    <!-- pick a known-safe value instead of guessing. -->
+                    <ComboBox x:Name="AutoLockTimeoutCombo"
+                              Header="Lock after"
+                              SelectionChanged="AutoLockTimeoutCombo_SelectionChanged"
+                              HorizontalAlignment="Stretch"
+                              MaxWidth="320">
+                        <ComboBoxItem Content="Never" Tag="0"/>
+                        <ComboBoxItem Content="1 minute" Tag="60"/>
+                        <ComboBoxItem Content="5 minutes" Tag="300"/>
+                        <ComboBoxItem Content="15 minutes (recommended)" Tag="900"/>
+                        <ComboBoxItem Content="1 hour" Tag="3600"/>
+                        <ComboBoxItem Content="4 hours" Tag="14400"/>
+                    </ComboBox>
+
+                    <TextBlock x:Name="AutoLockHint"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Default: 15 minutes. The setting persists across app restarts."/>
+
                     <Button x:Name="LockNowButton"
                             Content="Lock Vault Now"
                             Click="LockNow_Click"
-                            HorizontalAlignment="Left"></Button>
+                            HorizontalAlignment="Left"
+                            Margin="0,8,0,0"
+                            Style="{StaticResource AccentButtonStyle}"></Button>
                 </StackPanel>
             </Grid>
             

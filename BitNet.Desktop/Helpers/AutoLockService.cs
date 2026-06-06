@@ -57,6 +57,12 @@ public sealed class AutoLockService
     private bool _isLocked;
 
     /// <summary>
+    /// Current configured timeout. The Settings page
+    /// reads this to populate the ComboBox on load.
+    /// </summary>
+    public AutoLockTimeout Timeout => _timeout;
+
+    /// <summary>
     /// Fired on the UI thread when the idle timeout expires
     /// and the vault should be locked.
     /// </summary>
