@@ -189,5 +189,7 @@ read-timeout mapping in `Conn::read` is regression-tested by
 mapping the documented Win32 error codes to `TimedOut`.
 
 **Status**: Closed in the 2026-06-09 BugHunting round 2
-([commit hash]). Accepted-risk ID R007 is now CLOSED in
+([a77c5ac](../SECURITY_AUDIT_2026-06-09.md#audit-trail), followed
+by the two-layer follow-up in the same round-2 series).
+Accepted-risk ID R007 is now CLOSED in
 `THREAT_MODEL.md`.
