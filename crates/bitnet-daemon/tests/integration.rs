@@ -186,16 +186,26 @@ mod tests {
         params: serde_json::Value,
     ) -> serde_json::Value {
         let mut client = pipe.connect().expect("connect");
+        // [BITNET-M3] Every protected request carries a monotonic
+        // `seq` and a fresh `ts`. The integration tests use a
+        // simple counter (one per test) and `now_ts()` for the
+        // timestamp so the freshness check accepts them.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let mut req = Request {
             jsonrpc: "2.0".into(),
             id: 1,
             method: method.into(),
             params: params.clone(),
             auth: None,
+            seq: Some(1),
+            ts: Some(now),
         };
         if let Some(t) = token {
             let params_bytes = serde_json::to_vec(&params).expect("serialise params");
-            let auth_hex = bitnet_daemon::sign_request(t, method, &params_bytes);
+            let auth_hex = bitnet_daemon::sign_request(t, method, &params_bytes, 1, now);
             req.auth = Some(auth_hex);
         }
         let body = serde_json::to_value(&req).expect("serialise request");
@@ -374,6 +384,8 @@ mod tests {
             method: "ping".into(),
             params: serde_json::json!({}),
             auth: None,
+            seq: None,
+            ts: None,
         };
         let body = serde_json::to_value(&req).unwrap();
         let mut client = pipe.connect().expect("connect");
@@ -428,29 +440,54 @@ mod tests {
             method: "ping".into(),
             params: serde_json::json!({}),
             auth: None,
+            seq: None,
+            ts: None,
         };
         let v1 = dispatch(&state, &svc, r1);
         assert_eq!(v1["result"]["pong"], true);
 
+        // [BITNET-H1] unlock no longer returns token_hex. The
+        // client supplies its own token via params.
+        let supplied_token = [0x11u8; 32];
+        let token_hex: String = (0..32)
+            .map(|i| format!("{:02x}", supplied_token[i]))
+            .collect();
         let r2 = Request {
             jsonrpc: "2.0".into(),
             id: 2,
             method: "unlock".into(),
-            params: serde_json::json!({}),
+            params: serde_json::json!({
+                "path": "/vault.bitnet",
+                "token_hex": token_hex,
+            }),
             auth: None,
+            seq: None,
+            ts: None,
         };
         let v2 = dispatch(&state, &svc, r2);
-        let token_hex = v2["result"]["token_hex"].as_str().unwrap();
-        let token_bytes = hex_decode_lower(token_hex).unwrap();
-        let mut token = [0u8; 32];
-        token.copy_from_slice(&token_bytes);
+        assert!(v2["result"]["token_hex"].is_null());
+        let token = supplied_token;
 
+        // [BITNET-M3] is_unlocked requires HMAC over
+        // method || params || seq || ts with a fresh ts.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let r3 = Request {
             jsonrpc: "2.0".into(),
             id: 3,
             method: "is_unlocked".into(),
             params: serde_json::json!({}),
-            auth: Some(bitnet_daemon::sign_request(&token, "is_unlocked", b"{}")),
+            auth: Some(bitnet_daemon::sign_request(
+                &token,
+                "is_unlocked",
+                b"{}",
+                1,
+                now,
+            )),
+            seq: Some(1),
+            ts: Some(now),
         };
         let v3 = dispatch(&state, &svc, r3);
         assert_eq!(v3["result"]["unlocked"], true);

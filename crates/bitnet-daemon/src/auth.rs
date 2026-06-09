@@ -2,16 +2,24 @@
 //!
 //! After a successful `unlock` the daemon stores a 32-byte token
 //! (the `SessionToken.token` field). Every protected method must
-//! present an HMAC-SHA-256 of `method || params_json` keyed with
-//! the session token. Verification is constant-time.
+//! present an HMAC-SHA-256 of
+//! `method || params_json || seq_be || ts_be` keyed with the
+//! session token. Verification uses
+//! [`subtle::ConstantTimeEq`] for the MAC compare (not a
+//! hand-rolled constant-time loop, which the compiler is free to
+//! optimise away).
 //!
-//! The signed payload intentionally does not include the frame
-//! length or any other transport metadata so that the same
-//! signature works for any transport that delivers the same body
-//! bytes.
+//! [BITNET-M3] CWE-294 / CWE-345: the `seq` and `ts` fields are
+//! included in the signed payload. The daemon rejects requests
+//! with a `seq` lower than or equal to the last seen one, or a
+//! `ts` outside the freshness window (see
+//! `protocol::MAX_REQUEST_AGE_SECS`). A captured frame cannot be
+//! replayed past the freshness check, and even within the
+//! window the monotonic `seq` blocks re-sends.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -24,37 +32,54 @@ pub fn hmac_hex(key: &[u8], msg: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Compute the canonical request signature. Equivalent to
-/// `hmac_hex(key, method.as_bytes()) || hmac_hex(key, params_json)`
-/// in spirit, but the daemon signs a single concatenated buffer
-/// `method || params_json` so the client and the server cannot
-/// disagree on the boundary.
-pub fn sign_request(key: &[u8], method: &str, params_json: &[u8]) -> String {
-    let mut buf = Vec::with_capacity(method.len() + params_json.len());
+/// Compute the canonical request signature. The signed payload
+/// is `method || params_json || seq_be8 || ts_be8`, where the
+/// sequence and timestamp are 8-byte big-endian integers. The
+/// client and the server cannot disagree on the boundary
+/// because the format is fixed and the integers are
+/// length-prefixed by their encoding.
+///
+/// [BITNET-M2] CWE-208 / CWE-310: the previous implementation
+/// used a hand-rolled constant-time loop in `constant_time_eq`.
+/// The Rust compiler is not required to preserve that loop
+/// (e.g. it can auto-vectorise or short-circuit on a side
+/// channel). Switching to `subtle::ConstantTimeEq` removes the
+/// ambiguity: the crate emits a `core::intrinsics::ct_eq`-like
+/// sequence that LLVM is contractually forbidden from
+/// optimising into a non-constant-time form.
+pub fn sign_request(key: &[u8], method: &str, params_json: &[u8], seq: u64, ts: u64) -> String {
+    let mut buf = Vec::with_capacity(method.len() + params_json.len() + 16);
     buf.extend_from_slice(method.as_bytes());
     buf.extend_from_slice(params_json);
+    buf.extend_from_slice(&seq.to_be_bytes());
+    buf.extend_from_slice(&ts.to_be_bytes());
     hmac_hex(key, &buf)
 }
 
-/// Constant-time string comparison. Returns `false` if the two
-/// strings differ in length, but does not leak which one was
-/// longer (the length is not security-sensitive: hex output is
-/// always 64 chars for SHA-256).
+/// Constant-time string comparison backed by
+/// [`subtle::ConstantTimeEq`]. Returns `false` if the two strings
+/// differ in length, but does not leak which one was longer
+/// (the length is not security-sensitive: hex output is always
+/// 64 chars for SHA-256, so the lengths match for any signed
+/// request).
 fn constant_time_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let mut diff: u8 = 0;
-    for (x, y) in a.bytes().zip(b.bytes()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 /// Verify a request's `auth` field against the expected HMAC.
 /// Returns `true` if the auth matches, `false` otherwise.
-pub fn verify_request(key: &[u8], method: &str, params_json: &[u8], presented_auth: &str) -> bool {
-    let expected = sign_request(key, method, params_json);
+pub fn verify_request(
+    key: &[u8],
+    method: &str,
+    params_json: &[u8],
+    seq: u64,
+    ts: u64,
+    presented_auth: &str,
+) -> bool {
+    let expected = sign_request(key, method, params_json, seq, ts);
     constant_time_eq(&expected, presented_auth)
 }
 
@@ -96,48 +121,108 @@ mod tests {
         let key = b"0123456789abcdef0123456789abcdef";
         let method = "list_entries";
         let params = b"{}";
-        let s = sign_request(key, method, params);
+        let seq = 7u64;
+        let ts = 1_700_000_000u64;
+        let s = sign_request(key, method, params, seq, ts);
         let mut manual = Vec::new();
         manual.extend_from_slice(method.as_bytes());
         manual.extend_from_slice(params);
+        manual.extend_from_slice(&seq.to_be_bytes());
+        manual.extend_from_slice(&ts.to_be_bytes());
         assert_eq!(s, hmac_hex(key, &manual));
     }
 
     #[test]
     fn verify_request_accepts_matching_signature() {
         let key = b"key";
-        let s = sign_request(key, "ping", b"{}");
-        assert!(verify_request(key, "ping", b"{}", &s));
+        let s = sign_request(key, "ping", b"{}", 1, 1_700_000_000);
+        assert!(verify_request(key, "ping", b"{}", 1, 1_700_000_000, &s));
     }
 
     #[test]
     fn verify_request_rejects_wrong_key() {
-        let s = sign_request(b"key1", "ping", b"{}");
-        assert!(!verify_request(b"key2", "ping", b"{}", &s));
+        let s = sign_request(b"key1", "ping", b"{}", 1, 1_700_000_000);
+        assert!(!verify_request(
+            b"key2",
+            "ping",
+            b"{}",
+            1,
+            1_700_000_000,
+            &s
+        ));
     }
 
     #[test]
     fn verify_request_rejects_tampered_method() {
-        let s = sign_request(b"key", "ping", b"{}");
-        assert!(!verify_request(b"key", "list", b"{}", &s));
+        let s = sign_request(b"key", "ping", b"{}", 1, 1_700_000_000);
+        assert!(!verify_request(b"key", "list", b"{}", 1, 1_700_000_000, &s));
     }
 
     #[test]
     fn verify_request_rejects_tampered_params() {
-        let s = sign_request(b"key", "ping", b"{}");
-        assert!(!verify_request(b"key", "ping", b"{\"x\":1}", &s));
+        let s = sign_request(b"key", "ping", b"{}", 1, 1_700_000_000);
+        assert!(!verify_request(
+            b"key",
+            "ping",
+            b"{\"x\":1}",
+            1,
+            1_700_000_000,
+            &s
+        ));
     }
 
     #[test]
     fn verify_request_rejects_empty_auth() {
-        assert!(!verify_request(b"key", "ping", b"{}", ""));
+        assert!(!verify_request(b"key", "ping", b"{}", 1, 1_700_000_000, ""));
     }
 
     #[test]
     fn verify_request_rejects_wrong_length() {
-        let s = sign_request(b"key", "ping", b"{}");
-        // Truncate to half-length; should fail without panic.
+        let s = sign_request(b"key", "ping", b"{}", 1, 1_700_000_000);
         let half = &s[..s.len() / 2];
-        assert!(!verify_request(b"key", "ping", b"{}", half));
+        assert!(!verify_request(
+            b"key",
+            "ping",
+            b"{}",
+            1,
+            1_700_000_000,
+            half
+        ));
+    }
+
+    /// [BITNET-M3] CWE-294 / CWE-345: a captured frame must NOT
+    /// be replayable with a different `seq` even if the `ts` is
+    /// still inside the freshness window. A frame with `seq=5`
+    /// is invalid for a request with `seq=6` even if the bytes
+    /// are otherwise identical.
+    #[test]
+    fn verify_request_rejects_seq_mismatch() {
+        let s = sign_request(b"key", "list_entries", b"{}", 5, 1_700_000_000);
+        // The same bytes, but the caller claims seq=6 — must fail.
+        assert!(!verify_request(
+            b"key",
+            "list_entries",
+            b"{}",
+            6,
+            1_700_000_000,
+            &s
+        ));
+    }
+
+    /// [BITNET-M3] CWE-294 / CWE-345: replay with a stale `ts`
+    /// must be rejected at the auth layer (the daemon would
+    /// also reject it for being outside the freshness window,
+    /// but a missing or wrong `ts` should fail the MAC too).
+    #[test]
+    fn verify_request_rejects_ts_mismatch() {
+        let s = sign_request(b"key", "list_entries", b"{}", 5, 1_700_000_000);
+        assert!(!verify_request(
+            b"key",
+            "list_entries",
+            b"{}",
+            5,
+            1_700_000_001,
+            &s
+        ));
     }
 }

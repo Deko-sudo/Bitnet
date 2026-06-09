@@ -214,8 +214,13 @@ mod imp {
     }
 
     /// Wrapped `HANDLE` for the server side of the named pipe.
+    /// [BITNET-L1] CWE-362: `accept()` is concurrency-safe via
+    /// the `inflight` AtomicBool. Only one caller at a time can
+    /// be inside `accept_inner()`; concurrent callers get an
+    /// `Err(WouldBlock)`.
     pub struct Server {
         handle: HANDLE,
+        inflight: std::sync::atomic::AtomicBool,
     }
 
     // SAFETY: Win32 `HANDLE` values are thread-safe at the
@@ -280,14 +285,55 @@ mod imp {
                 return Err(io::Error::last_os_error());
             }
 
-            Ok(Self { handle })
+            Ok(Self {
+                handle,
+                inflight: std::sync::atomic::AtomicBool::new(false),
+            })
         }
 
         /// Block until a client connects. Returns a `Conn`
         /// that can be used to read one request and write one
         /// response. The `Conn` does not own the underlying
         /// pipe handle; the `Server` does.
+        ///
+        /// [BITNET-L1] CWE-362: this method is concurrency-safe.
+        /// If another thread is already inside `accept`, this
+        /// call returns `Err(ErrorKind::WouldBlock)` (we map
+        /// `Ok(false)` from the compare-and-swap to that error
+        /// to keep the `io::Result<Conn>` signature) rather
+        /// than racing two `ConnectNamedPipe` calls on the
+        /// same `HANDLE`.
         pub fn accept(&self) -> io::Result<Conn> {
+            // [BITNET-L1] Reserve the accept slot. The previous
+            // implementation had no guard and relied on the
+            // caller never invoking accept() twice in parallel.
+            if self
+                .inflight
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire,
+                )
+                .is_err()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "another thread is already in Server::accept()",
+                ));
+            }
+
+            // [BITNET-L1] Wrap the rest of the function so the
+            // inflight flag is released on any return path
+            // (success, error, panic).
+            let result = self.accept_inner();
+
+            self.inflight
+                .store(false, std::sync::atomic::Ordering::Release);
+            result
+        }
+
+        fn accept_inner(&self) -> io::Result<Conn> {
             // `ConnectNamedPipe` blocks until a client connects
             // (we did not set `FILE_FLAG_OVERLAPPED`). On
             // success it returns `Ok(())`; on error it returns

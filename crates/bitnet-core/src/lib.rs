@@ -290,16 +290,18 @@ impl SessionManager {
         self.ensure_unlocked()?;
         let mut state = self.state.lock();
         let session = state.as_mut().ok_or(CoreError::SessionLocked)?;
-        if let Some(group) = session.find_group_mut(group_uuid) {
-            group.entries.push(entry);
-        } else {
-            // Fallback: use first root group if uuid is all-zero or not found
-            if let Some(first_group) = session.groups.first_mut() {
-                first_group.entries.push(entry);
-            } else {
-                return Err(CoreError::GroupNotFound);
-            }
-        }
+        // [BITNET-M7] CWE-1284 / CWE-754: refuse the operation
+        // if the requested group UUID does not exist, instead
+        // of silently inserting into the first root group. The
+        // previous fallback made entry creation succeed in
+        // unexpected groups (e.g. an IPC caller supplying a
+        // wrong UUID would still have their entry persisted),
+        // confusing UI listings and violating the caller's
+        // intent.
+        let group = session
+            .find_group_mut(group_uuid)
+            .ok_or(CoreError::GroupNotFound)?;
+        group.entries.push(entry);
         session.touch();
         Ok(())
     }

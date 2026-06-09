@@ -246,11 +246,16 @@ pub unsafe extern "C" fn bitnet_add_entry(
         .and_then(|v| v.as_str())
         .and_then(uuid_from_hex)
         .unwrap_or_else(|| {
-            let mut bytes = [0u8; 16];
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
-            rng.fill(&mut bytes);
-            bytes
+            // [BITNET-M6] CWE-338: use `uuid::Uuid::new_v4()` for
+            // random UUID generation in the security-sensitive
+            // entry-creation path. The crate wraps the OS CSPRNG
+            // (getrandom on Unix, BCryptGenRandom on Windows)
+            // and matches the project's "OsRng everywhere" rule.
+            // The previous `rand::thread_rng()` call was
+            // cryptographically OK in `rand 0.8` but the
+            // explicit UUID path is the documented convention
+            // for the project and keeps the audit grep-clean.
+            uuid::Uuid::new_v4().into_bytes()
         });
 
     let title = Zeroizing::new(

@@ -15,4 +15,4 @@ bitnet-core = { workspace = true }
 bitnet-kdbx = { workspace = true }
 libc = { workspace = true }
 zeroize = { workspace = true }
-rand = { workspace = true }
+uuid = { workspace = true }

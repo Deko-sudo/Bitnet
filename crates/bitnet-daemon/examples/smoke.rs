@@ -29,18 +29,30 @@ fn main() {
         method: "ping".into(),
         params: serde_json::json!({}),
         auth: None,
+        seq: None,
+        ts: None,
     };
     let body = serde_json::to_value(&req).unwrap();
     protocol::write_frame(&mut client, &body).expect("write");
     let resp = protocol::read_frame(&mut client).expect("read");
     println!("ping: {resp}");
 
+    // [BITNET-H1] unlock with a client-supplied token.
+    let supplied_token = [0x22u8; 32];
+    let token_hex: String = (0..32)
+        .map(|i| format!("{:02x}", supplied_token[i]))
+        .collect();
     let req2 = Request {
         jsonrpc: "2.0".into(),
         id: 2,
         method: "unlock".into(),
-        params: serde_json::json!({}),
+        params: serde_json::json!({
+            "path": "/vault.bitnet",
+            "token_hex": token_hex,
+        }),
         auth: None,
+        seq: None,
+        ts: None,
     };
     let body2 = serde_json::to_value(&req2).unwrap();
     protocol::write_frame(&mut client, &body2).expect("write2");

@@ -190,7 +190,17 @@ fn main() {
                 );
                 return;
             }
-            let password = rpassword::prompt_password("Master password: ").unwrap();
+            // [BITNET-M5] CWE-755: avoid `unwrap()` so a
+            // stdin-not-a-TTY error does not panic the CLI and
+            // leak the master password string on the unwind.
+            // On error, return early; the user can retry.
+            let password = match rpassword::prompt_password("Master password: ") {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read master password: {e}");
+                    return;
+                }
+            };
             match manager.unlock(&path, password.as_bytes()) {
                 Ok(()) => println!("Vault unlocked successfully."),
                 Err(e) => eprintln!("Failed to unlock vault: {}", e),
@@ -305,9 +315,30 @@ fn main() {
             // In CLI mode there is no persistent session, so we cannot
             // prove knowledge of the current master password from a stored
             // key. We re-prompt and rely on a one-shot unlock + change.
-            let old = rpassword::prompt_password("Current master password: ").unwrap();
-            let new = rpassword::prompt_password("New master password: ").unwrap();
-            let confirm = rpassword::prompt_password("Confirm new master password: ").unwrap();
+            // [BITNET-M5] CWE-755: avoid `unwrap()` so a
+            // stdin-not-a-TTY error does not panic the CLI and
+            // leak the master password string on the unwind.
+            let old = match rpassword::prompt_password("Current master password: ") {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read master password: {e}");
+                    return;
+                }
+            };
+            let new = match rpassword::prompt_password("New master password: ") {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read master password: {e}");
+                    return;
+                }
+            };
+            let confirm = match rpassword::prompt_password("Confirm new master password: ") {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read master password: {e}");
+                    return;
+                }
+            };
             if new != confirm {
                 eprintln!("New passwords do not match.");
                 return;
@@ -328,8 +359,23 @@ fn main() {
                 );
                 return;
             }
-            let pw = rpassword::prompt_password("Set master password: ").unwrap();
-            let confirm = rpassword::prompt_password("Confirm master password: ").unwrap();
+            // [BITNET-M5] CWE-755: avoid `unwrap()` so a
+            // stdin-not-a-TTY error does not panic the CLI and
+            // leak the master password string on the unwind.
+            let pw = match rpassword::prompt_password("Set master password: ") {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read master password: {e}");
+                    return;
+                }
+            };
+            let confirm = match rpassword::prompt_password("Confirm master password: ") {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read master password: {e}");
+                    return;
+                }
+            };
             if pw != confirm {
                 eprintln!("Passwords do not match.");
                 return;
@@ -393,7 +439,17 @@ fn run_repl(manager: SessionManager, no_echo_flag: bool) {
                     eprintln!("Invalid vault path.");
                     continue;
                 }
-                let pw = rpassword::prompt_password("Master password: ").unwrap();
+                // [BITNET-M5] CWE-755: avoid `unwrap()` so a
+                // stdin-not-a-TTY error does not panic the REPL
+                // and leak the master password string on the
+                // unwind.
+                let pw = match rpassword::prompt_password("Master password: ") {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Failed to read master password: {e}");
+                        continue;
+                    }
+                };
                 match manager.unlock(args[0], pw.as_bytes()) {
                     Ok(()) => eprintln!("Vault unlocked."),
                     Err(e) => eprintln!("Unlock failed: {}", e),

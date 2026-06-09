@@ -9,6 +9,11 @@ use crate::protocol::{self, code, Method, Request};
 
 /// Connect to the daemon and send `request` with an HMAC signed by
 /// `token`. Returns the parsed JSON-RPC response value (raw JSON).
+///
+/// [BITNET-M3] CWE-294 / CWE-345: the caller is responsible for
+/// setting `request.seq` and `request.ts` (a monotonic per-client
+/// counter and a fresh Unix timestamp). The signature binds
+/// both, so the daemon can detect replays.
 pub fn call(token: &[u8], request: &Request) -> io::Result<serde_json::Value> {
     // Connect first; if the daemon is not running, the caller
     // sees an `io::Error` and falls back to direct mode.
@@ -19,7 +24,19 @@ pub fn call(token: &[u8], request: &Request) -> io::Result<serde_json::Value> {
     // the bytes the daemon will re-serialise on receipt.
     let params_bytes = serde_json::to_vec(&request.params)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let auth_hex = auth::sign_request(token, &request.method, &params_bytes);
+    // [BITNET-M3] Require seq + ts. If the caller did not set
+    // them, refuse the call rather than silently sign a frame
+    // the daemon will reject as a replay.
+    let (seq, ts) = match (request.seq, request.ts) {
+        (Some(s), Some(t)) => (s, t),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "request.seq and request.ts must be set before call()",
+            ));
+        }
+    };
+    let auth_hex = auth::sign_request(token, &request.method, &params_bytes, seq, ts);
     let mut signed = request.clone();
     signed.auth = Some(auth_hex);
 
@@ -30,14 +47,26 @@ pub fn call(token: &[u8], request: &Request) -> io::Result<serde_json::Value> {
     protocol::read_frame(&mut client)
 }
 
-/// Helper: build a `Request` from `id`, `method`, and `params`.
-pub fn make_request(id: u64, method: Method, params: serde_json::Value) -> Request {
+/// Helper: build a `Request` from `id`, `method`, `params`,
+/// `seq`, and `ts`. The seq/ts are MANDATORY for protected
+/// methods (see [BITNET-M3]); `call` rejects requests that omit
+/// them. `ping` and `unlock` are not protected and may pass
+/// `seq=0, ts=now` (or any placeholder).
+pub fn make_request(
+    id: u64,
+    method: Method,
+    params: serde_json::Value,
+    seq: u64,
+    ts: u64,
+) -> Request {
     Request {
         jsonrpc: "2.0".into(),
         id,
         method: method.as_str().into(),
         params,
         auth: None, // `call` fills this in.
+        seq: Some(seq),
+        ts: Some(ts),
     }
 }
 
@@ -49,7 +78,15 @@ pub fn daemon_alive() -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    let req = make_request(0, Method::Ping, serde_json::json!({}));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // `ping` does not require auth or replay protection, but the
+    // Request struct still needs seq/ts filled in because the
+    // serialised wire format includes them. We pass any
+    // placeholder values — the daemon ignores seq/ts on `ping`.
+    let req = make_request(0, Method::Ping, serde_json::json!({}), 0, now);
     let value = match serde_json::to_value(&req) {
         Ok(v) => v,
         Err(_) => return false,
@@ -77,6 +114,7 @@ pub fn describe_error_code(code: i32) -> &'static str {
         code::UNKNOWN_METHOD => "unknown method",
         code::OVERSIZED => "payload too large",
         code::UNAUTHORIZED => "auth failed",
+        code::REPLAY => "replay detected",
         _ => "daemon error",
     }
 }
@@ -102,9 +140,17 @@ mod tests {
 
     #[test]
     fn make_request_has_no_auth() {
-        let req = make_request(1, Method::ListEntries, serde_json::json!({}));
+        let req = make_request(
+            1,
+            Method::ListEntries,
+            serde_json::json!({}),
+            7,
+            1_700_000_000,
+        );
         assert!(req.auth.is_none());
         assert_eq!(req.method, "list_entries");
+        assert_eq!(req.seq, Some(7));
+        assert_eq!(req.ts, Some(1_700_000_000));
     }
 
     #[test]

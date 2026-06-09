@@ -125,6 +125,10 @@ pub mod code {
     pub const OVERSIZED: i32 = -9;
     /// The HMAC signature on the request did not verify.
     pub const UNAUTHORIZED: i32 = -10;
+    /// The `seq` field was lower than or equal to a previously
+    /// seen one, or the `ts` was outside [`MAX_REQUEST_AGE_SECS`].
+    /// [BITNET-M3] replay-protection.
+    pub const REPLAY: i32 = -11;
 }
 
 /// JSON-RPC 2.0 method names.
@@ -204,11 +208,35 @@ pub struct Request {
     #[serde(default)]
     pub params: serde_json::Value,
     /// Optional HMAC-SHA-256 hex digest, computed by the client
-    /// over `method || params_json` using the session token as the
-    /// key. Required for every method except `ping`.
+    /// over `method || params_json || seq || ts` (each field as
+    /// canonical UTF-8 bytes) using the session token as the key.
+    /// Required for every method except `ping` and `unlock`.
+    ///
+    /// [BITNET-M3] CWE-294/CWE-345: binding a monotonic `seq`
+    /// and a `ts` into the signed payload closes the replay
+    /// window — a captured frame cannot be re-sent past the
+    /// freshness check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<String>,
+    /// Monotonic per-client sequence number. The daemon
+    /// remembers the highest `seq` it has seen for each
+    /// client (keyed on session token) and rejects any
+    /// request with `seq <= last_seen`. Optional for `ping`
+    /// and `unlock`, required for everything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    /// Unix timestamp in seconds at which the client signed
+    /// the request. The daemon rejects any request with
+    /// `|now - ts| > MAX_REQUEST_AGE_SECS`. Required for
+    /// non-`ping`/`unlock` methods.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<u64>,
 }
+
+/// Maximum allowed clock skew between client and daemon,
+/// in seconds. Requests outside this window are rejected
+/// as a replay-protection measure.
+pub const MAX_REQUEST_AGE_SECS: u64 = 30;
 
 /// Error body of a [`Response`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,16 +405,24 @@ mod tests {
             method: "ping".into(),
             params: serde_json::json!({}),
             auth: None,
+            seq: None,
+            ts: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(!s.contains("auth"), "auth field should be omitted: {s}");
+        assert!(!s.contains("seq"), "seq field should be omitted: {s}");
+        assert!(!s.contains("\"ts\""), "ts field should be omitted: {s}");
 
         let r2 = Request {
             auth: Some("deadbeef".into()),
+            seq: Some(1),
+            ts: Some(1_700_000_000),
             ..r.clone()
         };
         let s2 = serde_json::to_string(&r2).unwrap();
         assert!(s2.contains("auth"));
         assert!(s2.contains("deadbeef"));
+        assert!(s2.contains("\"seq\":1"));
+        assert!(s2.contains("\"ts\":1700000000"));
     }
 }

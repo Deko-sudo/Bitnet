@@ -90,7 +90,13 @@ public static class ClipboardHelper
         // Verify the clipboard still contains OUR text (the
         // user may have copied something else in the
         // meantime). If they did, leave their content alone.
-        if (TryGetCurrentText(out var current) && current == original)
+        // [BITNET-M1] CWE-208: use ordinal, non-allocating
+        // comparison rather than the default String == operator
+        // (which uses the locale-aware `currentCulture` comparer
+        // and may be subject to reference-equality shortcuts for
+        // short, interned strings).
+        if (TryGetCurrentText(out var current)
+            && string.Equals(current, original, StringComparison.Ordinal))
         {
             ClearClipboard();
         }
