@@ -60,6 +60,11 @@ enum Commands {
     /// "unsupported") until the Win32 Named Pipe backend lands;
     /// see `docs/PHASE_3_DESIGN.md` for the full design.
     Daemon,
+    /// Graceful shutdown of the running daemon. Sends a
+    /// `shutdown` JSON-RPC request and waits for the daemon to
+    /// exit. The daemon will finish any in-flight request,
+    /// zeroise the token, and terminate cleanly.
+    Stop,
     /// Ping the running daemon. Exits 0 if it is reachable, 1
     /// otherwise. Useful for shell scripts that need to know
     /// whether a daemon is up before running sensitive commands.
@@ -160,6 +165,14 @@ fn main() {
             let service = bitnet_daemon::NoopVaultService;
             info!("bitnet-cli daemon listening");
             loop {
+                // [BITNET-S1] Graceful shutdown check.
+                {
+                    let guard = state.lock().unwrap();
+                    if guard.shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                        info!("daemon shutting down gracefully");
+                        break;
+                    }
+                }
                 match server.accept() {
                     Ok(mut conn) => {
                         if let Err(_e) =
@@ -172,6 +185,46 @@ fn main() {
                         error!(op = "daemon", kind = "Error", "accept failed");
                         tracing::debug!(error = %e, "accept failed");
                     }
+                }
+            }
+        }
+        Commands::Stop => {
+            if !bitnet_daemon::daemon_alive() {
+                eprintln!("daemon is not running");
+                std::process::exit(1);
+            }
+            match bitnet_daemon::Client::connect() {
+                Ok(mut client) => {
+                    let req = bitnet_daemon::Request {
+                        jsonrpc: "2.0".into(),
+                        id: 1,
+                        method: "shutdown".into(),
+                        params: serde_json::json!({}),
+                        auth: None,
+                        seq: None,
+                        ts: None,
+                    };
+                    let body = serde_json::to_value(&req).unwrap();
+                    if let Err(e) = bitnet_daemon::protocol::write_frame(&mut client, &body) {
+                        eprintln!("failed to send shutdown request: {e}");
+                        std::process::exit(1);
+                    }
+                    let _ = bitnet_daemon::protocol::read_frame(&mut client);
+                    println!("shutdown request sent");
+                    // Poll briefly until the daemon pipe disappears.
+                    let start = std::time::Instant::now();
+                    while bitnet_daemon::daemon_alive() && start.elapsed().as_secs() < 5 {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    if bitnet_daemon::daemon_alive() {
+                        eprintln!("daemon did not exit within 5s");
+                        std::process::exit(1);
+                    }
+                    println!("daemon stopped");
+                }
+                Err(e) => {
+                    eprintln!("failed to connect to daemon: {e}");
+                    std::process::exit(1);
                 }
             }
         }

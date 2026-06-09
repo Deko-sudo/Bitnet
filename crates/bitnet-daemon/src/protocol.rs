@@ -156,6 +156,8 @@ pub enum Method {
     Totp,
     /// Stateless password generation. No auth required.
     GeneratePassword,
+    /// Graceful shutdown. No auth required. Returns `{"ok": true}`.
+    Shutdown,
 }
 
 impl Method {
@@ -175,6 +177,7 @@ impl Method {
             "delete_entry" => Method::DeleteEntry,
             "totp" => Method::Totp,
             "generate_password" => Method::GeneratePassword,
+            "shutdown" => Method::Shutdown,
             _ => return None,
         })
     }
@@ -192,6 +195,7 @@ impl Method {
             Method::DeleteEntry => "delete_entry",
             Method::Totp => "totp",
             Method::GeneratePassword => "generate_password",
+            Method::Shutdown => "shutdown",
         }
     }
 }

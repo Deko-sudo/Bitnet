@@ -42,6 +42,10 @@ pub struct DaemonState {
     /// monotonic progression. Reset to `None` when the token is
     /// cleared (e.g. on `lock` or a new `unlock`).
     pub last_seq: Option<u64>,
+    /// Graceful shutdown flag. Set to `true` when a `shutdown`
+    /// request is received; the main accept loop checks this
+    /// between iterations.
+    pub shutdown: std::sync::atomic::AtomicBool,
 }
 
 impl DaemonState {
@@ -50,6 +54,7 @@ impl DaemonState {
         Self {
             token: None,
             last_seq: None,
+            shutdown: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -228,10 +233,12 @@ pub fn dispatch<S: VaultService>(
         None => return make_err(request.id, code::UNKNOWN_METHOD, "unknown method"),
     };
 
-    // `ping` and `unlock` bypass auth. `ping` lets clients detect
-    // whether the daemon is running; `unlock` is the *only* way a
-    // client can obtain a session token, so requiring auth on it
-    // would be a chicken-and-egg problem.
+    // `ping`, `unlock` and `shutdown` bypass auth. `ping` lets
+    // clients detect whether the daemon is running; `unlock` is
+    // the *only* way a client can obtain a session token, so
+    // requiring auth on it would be a chicken-and-egg problem.
+    // `shutdown` must be auth-free so the process owner can
+    // stop the daemon even when the vault is locked.
     match method {
         Method::Ping => return make_ok(request.id, serde_json::json!({"pong": true})),
         Method::Unlock => {
@@ -253,6 +260,14 @@ pub fn dispatch<S: VaultService>(
             };
             let mut g = state.lock().unwrap();
             g.set_token(new_token);
+            return make_ok(request.id, serde_json::json!({"ok": true}));
+        }
+        Method::Shutdown => {
+            state
+                .lock()
+                .unwrap()
+                .shutdown
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             return make_ok(request.id, serde_json::json!({"ok": true}));
         }
         _ => {}
@@ -390,9 +405,9 @@ pub fn dispatch<S: VaultService>(
         Method::GeneratePassword => {
             service_method(request.id, service.generate_password(&request.params))
         }
-        // ping and unlock were handled above; these arms are
-        // unreachable but keep the match exhaustive.
-        Method::Ping | Method::Unlock => {
+        // ping, unlock and shutdown were handled above; these
+        // arms are unreachable but keep the match exhaustive.
+        Method::Ping | Method::Unlock | Method::Shutdown => {
             unreachable!("handled in early return above")
         }
     }
@@ -778,5 +793,44 @@ mod tests {
         // seq and ts left as None on purpose.
         let resp = dispatch(&state, &svc, req);
         assert_eq!(resp["error"]["code"], code::REPLAY);
+    }
+
+    /// [BITNET-S1] shutdown sets the AtomicBool flag in
+    /// DaemonState and returns ok.
+    #[test]
+    fn shutdown_sets_shutdown_flag() {
+        let state = Mutex::new(DaemonState::new());
+        let svc = NoopVaultService;
+        let req = empty_request(1, "shutdown");
+        let resp = dispatch(&state, &svc, req);
+        assert_eq!(resp["result"]["ok"], true);
+        assert!(
+            state.lock().unwrap().shutdown.load(std::sync::atomic::Ordering::SeqCst),
+            "shutdown flag must be set"
+        );
+    }
+
+    /// [BITNET-S1] shutdown requires no authentication.
+    #[test]
+    fn shutdown_is_auth_free() {
+        let state = Mutex::new(DaemonState::new());
+        let svc = NoopVaultService;
+        let req = empty_request(1, "shutdown");
+        let resp = dispatch(&state, &svc, req);
+        assert_eq!(resp["error"], serde_json::Value::Null);
+        assert_eq!(resp["result"]["ok"], true);
+    }
+
+    /// [BITNET-S1] shutdown does not mutate the token.
+    #[test]
+    fn shutdown_preserves_token_when_unlocked() {
+        let state = Mutex::new(DaemonState::new());
+        let token = [7u8; 32];
+        state.lock().unwrap().set_token(token);
+        let svc = NoopVaultService;
+        let req = empty_request(1, "shutdown");
+        let resp = dispatch(&state, &svc, req);
+        assert_eq!(resp["result"]["ok"], true);
+        assert!(state.lock().unwrap().has_token(), "token must survive shutdown request");
     }
 }
