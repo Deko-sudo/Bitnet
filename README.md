@@ -11,10 +11,10 @@ Offline password manager for Windows with Zero Trust architecture, built in Rust
 - **WinUI 3**: Fluent Design, Acrylic/Mica, dark theme support
 
 ## Architecture
-- **Rust Core** (`crates/`): Crypto, KDBX, TOTP, Session Manager, FFI
+- **Rust Core** (`crates/`): Crypto, KDBX, TOTP, Session Manager, FFI, **Daemon**
 - **C# GUI** (`BitNet.Desktop/`): WinUI 3 frontend
 - **Browser Extension** (`browser-extension/`): Manifest V3 + Native Messaging
-- **CLI** (`bitnet-cli/`): Command-line MVP
+- **CLI** (`bitnet-cli/`): Command-line MVP + daemon subcommands
 
 ---
 
@@ -55,6 +55,12 @@ cargo run --release --bin bitnet-cli -- generate --length 20
 
 # Show vault fingerprint
 cargo run --release --bin bitnet-cli -- info C:\Users\You\vault.bitnet
+
+# Start background daemon (holds unlocked session for fast attach)
+cargo run --release --bin bitnet-cli -- daemon
+
+# Check if daemon is running
+bitnet-cli ping
 ```
 
 ### 3. Run WinUI 3 Desktop App
@@ -65,6 +71,7 @@ cargo run --release --bin bitnet-cli -- info C:\Users\You\vault.bitnet
 # Copy native binaries first
 Copy-Item target\release\bitnet_ffi.dll BitNet.Desktop\Native\
 Copy-Item target\release\bitnet-native-host.exe BitNet.Desktop\Native\
+Copy-Item target\release\bitnet-cli.exe BitNet.Desktop\Native\
 
 # Build and run
 cd BitNet.Desktop
@@ -97,7 +104,7 @@ Or use the build script:
 ### 5. Run Tests
 
 ```bash
-# Rust unit tests (111+ tests across all crates)
+# Rust unit tests (169+ tests across all crates)
 cargo test --workspace
 
 # Clippy (zero warnings policy)
@@ -147,6 +154,29 @@ npm test
 See [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) for details.
 
 ---
+
+## Daemon Mode
+
+BitNet can run as a **long-lived background daemon** (`bitnet-cli daemon`)
+that holds an unlocked vault session in memory. Subsequent CLI calls and
+the Desktop app **attach** to the daemon instead of re-deriving the key
+on every operation.
+
+```bash
+# Terminal 1 — start the daemon (blocks)
+bitnet-cli daemon
+
+# Terminal 2 — check health
+bitnet-cli ping        # exit 0 if alive, 1 if not
+```
+
+The Desktop app auto-launches the daemon on startup via
+`DaemonLauncher.cs` (resolves `bitnet-cli.exe` from its own install
+directory, preventing PATH-hijack attacks).
+
+See [`docs/PHASE_3_DESIGN.md`](docs/PHASE_3_DESIGN.md) for the full
+protocol specification (JSON-RPC 2.0, HMAC-SHA-256 auth, replay
+protection, IPC transport).
 
 ## Security
 
