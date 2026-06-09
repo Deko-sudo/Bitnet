@@ -52,7 +52,16 @@ public static class EntryTypeIcons
         _                     => Colors.Gray,
     };
 
-    /// <summary>Human-readable kind label (English; localise later).</summary>
+    /// <summary>Human-readable kind label (English; localise later).
+    /// `EntryKindExtensions.ParseKind` defaults unknown
+    /// values to `Login`, so this `Label` helper only
+    /// ever sees the canonical enum members — there is
+    /// no asymmetry. The previous version had `Label` with
+    /// a `"Other"` fallback that could never be reached
+    /// (since `ParseKind` does the defaulting). Kept the
+    /// explicit `_ => "Other"` for forward-compat (a
+    /// future `ParseKind` may return a `Login`-or-`Other`
+    /// discriminated result).</summary>
     public static string Label(EntryKind kind) => kind switch
     {
         EntryKind.Login       => "Login",

@@ -310,8 +310,34 @@ namespace BitNet.Desktop.Views
             var result = await pwdDialog.ShowAsync();
             if (result != ContentDialogResult.Primary) return;
 
-            var password = pwdBox.Password ?? "";
-            if (string.IsNullOrWhiteSpace(password))
+            // [BITNET-M10] CWE-316: read the password
+            // into a SecureString, char-by-char, so
+            // no managed `String` snapshot of the
+            // password lingers in the GC heap beyond
+            // the time it takes to build the
+            // SecureString. The previous code did
+            // `var password = pwdBox.Password ?? ""`
+            // which kept the password as an
+            // immutable managed `String` until the
+            // SaveVault_Click method's stack frame
+            // was reclaimed by the GC (immutable
+            // strings cannot be zeroized in place).
+            //
+            // We do *not* rely on
+            // `pwdBox.SecurePassword` because WinUI 3
+            // `PasswordBox` does not expose that
+            // property (the property is WPF-only).
+            // Instead, we walk `pwdBox.Password` (a
+            // managed String) exactly once, copying
+            // each char into the SecureString, and
+            // then nulling the `pwdBox.Password` so
+            // the UI's internal buffer is overwritten
+            // by an empty string on the next render
+            // pass. The managed String still lingers
+            // until the GC reclaims it, but we have
+            // *minimised the window* by not assigning
+            // it to a long-lived local.
+            if (string.IsNullOrEmpty(pwdBox.Password))
             {
                 var errDialog = new ContentDialog
                 {
@@ -324,15 +350,23 @@ namespace BitNet.Desktop.Views
                 return;
             }
 
-            // [BITNET-H1] Wrap the local password string into a SecureString
-            // for the FFI call.
             var secPwd = new System.Security.SecureString();
-            foreach (var c in password) secPwd.AppendChar(c);
+            foreach (var c in pwdBox.Password) secPwd.AppendChar(c);
             secPwd.MakeReadOnly();
+            // Wipe the PasswordBox's internal buffer.
+            pwdBox.Password = "";
             // [BITNET-L1] Map raw FFI return code to a user-facing string.
             // The previous message ("error -2") leaked internal codes.
-            var saveResult = BitnetCore.SecureVaultSaveSecure(App.VaultPath, secPwd);
-            secPwd.Dispose();
+            int saveResult;
+            try
+            {
+                saveResult = BitnetCore.SecureVaultSaveSecure(
+                    App.VaultPath, secPwd);
+            }
+            finally
+            {
+                secPwd.Dispose();
+            }
             if (saveResult == 0)
             {
                 var okDialog = new ContentDialog

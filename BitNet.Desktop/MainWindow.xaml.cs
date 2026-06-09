@@ -16,9 +16,22 @@ namespace BitNet.Desktop
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(null);
             NavView.Visibility = Visibility.Collapsed;
-            ContentFrame.Navigate(typeof(Views.UnlockPage));
-            ContentFrame.Navigated += ContentFrame_Navigated;
 
+            // [BITNET-L3] CWE-841 (documentation): the
+            // `AutoLockService.Load()` call below must run
+            // BEFORE `ContentFrame.Navigate(typeof(UnlockPage))`,
+            // because the navigation fires
+            // `ContentFrame_Navigated` which calls
+            // `AutoLockService.Instance.LockNow()`. The
+            // Load is harmless whether it runs before or
+            // after the LockNow (it only reads from
+            // LocalSettings), but the relative ordering
+            // matters: if a future refactor moves the
+            // `Navigate` call up, the auto-lock timer
+            // will be running with the *default* 15 min
+            // timeout during the first user-visible
+            // frame, instead of the persisted value.
+            //
             // Apply the persisted theme preference on
             // launch. The Settings page handles
             // user-driven changes at runtime.
@@ -41,7 +54,27 @@ namespace BitNet.Desktop
             // timer fires, we navigate back to the unlock
             // page (which discards any in-memory secrets)
             // and clear the clipboard just in case.
+            //
+            // [BITNET-L3] Load BEFORE Navigate (see the
+            // long comment above).
             AutoLockService.Instance.Load();
+
+            // [BITNET-L3] navigate to the unlock page
+            // AFTER wiring up `ContentFrame.Navigated`
+            // so the very first navigation event is
+            // observed (the old code navigated first and
+            // wired second; the event still fired because
+            // WinUI 3 fires the event synchronously on
+            // the current thread, but the ordering was
+            // fragile). The order is now:
+            //   1. InitializeComponent
+            //   2. Apply theme
+            //   3. AutoLockService.Load()
+            //   4. Wire Navigated handler
+            //   5. Wire Touch() handlers (H4)
+            //   6. Wire AutoLock event handler (H5)
+            //   7. Navigate(UnlockPage)
+            ContentFrame.Navigated += ContentFrame_Navigated;
 
             // [BITNET-H4] CWE-613: AutoLockService.Touch() used to
             // be dead code (no callers). Wire the root ContentFrame
@@ -78,6 +111,10 @@ namespace BitNet.Desktop
                     ContentFrame.Navigate(typeof(Views.UnlockPage));
                 });
             };
+
+            // [BITNET-L3] navigate AFTER all wiring
+            // (see comment above).
+            ContentFrame.Navigate(typeof(Views.UnlockPage));
         }
 
         // [BITNET-H4] Any pointer press or key press anywhere inside

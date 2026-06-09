@@ -26,6 +26,20 @@ namespace BitNet.Desktop.Views
         /// navigates directly to the unlock page).</summary>
         private bool _initialised;
 
+        // [BITNET-M11] CWE-841: when the page is first
+        // loaded, OnLoaded sets `ThemeRadioButtons.SelectedIndex`
+        // to reflect the persisted preference. That
+        // assignment fires the `SelectionChanged` event,
+        // which would normally persist the preference
+        // back to LocalSettings. On a first launch (or any
+        // time the radio buttons are in a transient
+        // state) the SelectionChanged can race with the
+        // initial wiring and overwrite the user's
+        // saved Light/Dark with the placeholder
+        // SystemDefault. The flag suppresses the Save
+        // call during the initial population.
+        private bool _isLoadingPreference;
+
         public SettingsPage()
         {
             this.InitializeComponent();
@@ -48,9 +62,23 @@ namespace BitNet.Desktop.Views
             // Reflect the persisted theme preference.
             // RadioButtons with string content lets us
             // map the displayed text directly onto the
-            // AppThemePreference enum.
+            // AppThemePreference enum. The
+            // `_isLoadingPreference` guard prevents the
+            // SelectionChanged handler from re-saving
+            // the value we just loaded (which would race
+            // with the first launch and could clobber a
+            // saved Light / Dark preference with the
+            // SystemDefault placeholder).
             var theme = AppThemeService.Load();
-            ThemeRadioButtons.SelectedIndex = (int)theme;
+            _isLoadingPreference = true;
+            try
+            {
+                ThemeRadioButtons.SelectedIndex = (int)theme;
+            }
+            finally
+            {
+                _isLoadingPreference = false;
+            }
         }
 
         private void SelectTimeout(AutoLockTimeout timeout)
@@ -124,6 +152,11 @@ namespace BitNet.Desktop.Views
         private void ThemeRadioButtons_SelectionChanged(
             object sender, SelectionChangedEventArgs e)
         {
+            // [BITNET-M11] ignore the SelectionChanged
+            // raised by the initial population in
+            // OnLoaded; only persist on user-initiated
+            // changes.
+            if (_isLoadingPreference) return;
             if (ThemeRadioButtons.SelectedIndex < 0) return;
             var pref = (AppThemePreference)ThemeRadioButtons.SelectedIndex;
             AppThemeService.Save(pref);
