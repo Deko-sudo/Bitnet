@@ -23,10 +23,12 @@ report covers findings that the round-1 audit did not cover.
 | **Info** | **1** | **Closed** |
 | **Total** | **15** | **15/15 closed (100%)** |
 
-The remaining open item is `BITNET-M4` (read timeout in
-`read_frame`); a partial mitigation is shipped in this round and the
-hard limit is documented in `SECURITY_NOTES.md` as accepted-risk
-`R007`.
+All 15 findings from the BugHunting round 2 audit are now
+closed. The two-layer read-timeout fix in
+`crates/bitnet-daemon/src/protocol.rs` and
+`crates/bitnet-daemon/src/ipc.rs` (Windows) is the hard
+follow-up to the original `BITNET-M4` partial-fix that was
+shipped in round 2.
 
 ---
 
