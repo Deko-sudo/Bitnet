@@ -35,11 +35,12 @@
                  `kind` field from the Rust core. -->
             <ComboBox x:Name="TypeFilter"
                       Grid.Column="1"
-                      SelectedIndex="0"
+                      SelectedIndex="1"
                       SelectionChanged="TypeFilter_SelectionChanged"
                       Margin="12,0,0,0"
-                      MinWidth="140"
+                      MinWidth="160"
                       VerticalAlignment="Center">
+                <ComboBoxItem Content="Favorites" Tag="favorites"/>
                 <ComboBoxItem Content="All" Tag="all"/>
                 <ComboBoxItem Content="Logins" Tag="login"/>
                 <ComboBoxItem Content="Cards" Tag="card"/>
@@ -86,12 +87,30 @@
                     <Grid Padding="12,8" ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        
-                        <!-- Icon -->
+
+                        <!-- Favorite indicator (Bitwarden-style
+                             star). The glyph swaps between
+                             the filled and outline versions
+                             so the user can see at a glance
+                             which entries are favourites. We
+                             bind Visibility so a non-favourite
+                             hides the icon completely, leaving
+                             more room for the title. -->
                         <FontIcon Grid.Column="0"
+                                  Glyph="&#xE735;"
+                                  FontSize="14"
+                                  VerticalAlignment="Center"
+                                  Foreground="{ThemeResource SystemFillColorAttentionBrush}"
+                                  Margin="0,0,0,0"
+                                  AutomationProperties.Name="Favorite"
+                                  Visibility="{x:Bind Favorite, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
+
+                        <!-- Icon -->
+                        <FontIcon Grid.Column="1"
                                   Glyph="{x:Bind IconGlyph}"
                                   FontSize="24"
                                   VerticalAlignment="Center"
@@ -99,7 +118,7 @@
                                   Margin="0,0,4,0"/>
                         
                         <!-- Info -->
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
                             <TextBlock Text="{x:Bind Title}"
                                        Style="{StaticResource BodyStrongTextBlockStyle}"
                                        TextTrimming="CharacterEllipsis"/>
@@ -117,7 +136,7 @@
                         </StackPanel>
                         
                         <!-- TOTP indicator & Actions -->
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8">
                             <FontIcon x:Name="TOTPIcon"
                                       Glyph="&#xE9D9;"
                                       FontSize="16"

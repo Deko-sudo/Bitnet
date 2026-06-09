@@ -19,6 +19,24 @@ namespace BitNet.Desktop
             ContentFrame.Navigate(typeof(Views.UnlockPage));
             ContentFrame.Navigated += ContentFrame_Navigated;
 
+            // Apply the persisted theme preference on
+            // launch. The Settings page handles
+            // user-driven changes at runtime.
+            try
+            {
+                var pref = AppThemeService.Load();
+                if (Content is FrameworkElement root)
+                {
+                    root.RequestedTheme = AppThemeService.ToElementTheme(pref);
+                }
+            }
+            catch
+            {
+                // best-effort: if LocalSettings is
+                // unavailable, fall back to the system
+                // default.
+            }
+
             // Wire up the AutoLockService. When the idle
             // timer fires, we navigate back to the unlock
             // page (which discards any in-memory secrets)

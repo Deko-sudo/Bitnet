@@ -19,6 +19,11 @@
   <ItemGroup>
     <Compile Include="..\BitNet.Desktop\Native\BitnetCore.cs" Link="BitnetCore.cs" />
     <Compile Include="..\BitNet.Desktop\Helpers\SecureMemory.cs" Link="Helpers\SecureMemory.cs" />
+    <Compile Include="..\BitNet.Desktop\Helpers\PasswordStrength.cs" Link="Helpers\PasswordStrength.cs" />
+    <Compile Include="..\BitNet.Desktop\Helpers\EntryKind.cs" Link="Helpers\EntryKind.cs" />
+    <Compile Include="..\BitNet.Desktop\Helpers\AutoLockTimeout.cs" Link="Helpers\AutoLockTimeout.cs" />
+    <Compile Include="..\BitNet.Desktop\Helpers\AppThemePreference.cs" Link="Helpers\AppThemePreference.cs" />
+    <Compile Include="..\BitNet.Desktop\Native\DaemonLauncher.cs" Link="Native\DaemonLauncher.cs" />
   </ItemGroup>
 
 </Project>

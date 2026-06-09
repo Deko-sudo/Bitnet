@@ -1,32 +1,22 @@
-// BitNet.Desktop - EntryTypeIcons
+// BitNet.Desktop - EntryTypeIcons (WinUI 3 specific)
 //
-// Maps entry types to Segoe Fluent Icons glyphs and accent
-// colours. The icon set follows the Bitwarden / Proton
-// Pass conventions so the UI is instantly familiar to
-// users migrating from other password managers.
+// Maps `EntryKind` to the WinUI 3 visual primitives
+// (Segoe Fluent glyphs and `Windows.UI.Color`
+// accents). This file depends on `Microsoft.UI` and
+// `Windows.UI.Color` and so is NOT linked into the
+// test project. The unit tests for `EntryKind` and
+// its `ParseKind` / `ToWireString` helpers live in
+// `EntryKind.cs` and `HelperTests.cs`.
 //
-// Glyph codes are from the Segoe Fluent Icons font that
-// ships with Windows 11. On Windows 10 they fall back to
-// the older Segoe MDL2 Assets codes (close enough for v1;
-// the font fallback in WinUI 3 handles the difference).
+// Glyph codes are from the Segoe Fluent Icons font
+// that ships with Windows 11. On Windows 10 they
+// fall back to the older Segoe MDL2 Assets codes
+// (close enough for v1; the WinUI 3 font fallback
+// handles the difference).
 
 using Microsoft.UI;
 
 namespace BitNet.Desktop.Helpers;
-
-public enum EntryKind
-{
-    Login,
-    SecureNote,
-    CreditCard,
-    Identity,
-    SshKey,
-    Wifi,
-    Database,
-    Passport,
-    Driver,
-    Software,
-}
 
 public static class EntryTypeIcons
 {
@@ -46,7 +36,7 @@ public static class EntryTypeIcons
         _                     => "\uE7C3", // fallback globe
     };
 
-    /// <summary>Accent brush key for the entry kind.</summary>
+    /// <summary>Accent colour for the entry kind.</summary>
     public static Windows.UI.Color AccentColor(EntryKind kind) => kind switch
     {
         EntryKind.Login       => Colors.SteelBlue,

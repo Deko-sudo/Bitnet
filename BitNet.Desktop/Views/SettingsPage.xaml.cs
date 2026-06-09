@@ -17,7 +17,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using BitNet.Desktop.Helpers;
 using BitNet.Desktop.Native;
-
 namespace BitNet.Desktop.Views
 {
     public sealed partial class SettingsPage : Page
@@ -45,6 +44,13 @@ namespace BitNet.Desktop.Views
             var timeout = AutoLockService.Instance.Timeout;
             AutoLockToggle.IsOn = timeout != AutoLockTimeout.Never;
             SelectTimeout(timeout);
+
+            // Reflect the persisted theme preference.
+            // RadioButtons with string content lets us
+            // map the displayed text directly onto the
+            // AppThemePreference enum.
+            var theme = AppThemeService.Load();
+            ThemeRadioButtons.SelectedIndex = (int)theme;
         }
 
         private void SelectTimeout(AutoLockTimeout timeout)
@@ -104,6 +110,31 @@ namespace BitNet.Desktop.Views
             // in MainWindow takes us to the unlock page.
             BitnetCore.bitnet_vault_lock();
             AutoLockService.Instance.LockNow();
+        }
+
+        /// <summary>
+        /// Persist the theme selection whenever the
+        /// user picks a different option. The actual
+        /// theme application is the responsibility of
+        /// MainWindow (which owns the root visual);
+        /// the page only saves the preference and
+        /// emits a debug log so we can trace
+        /// unexpected navigations.
+        /// </summary>
+        private void ThemeRadioButtons_SelectionChanged(
+            object sender, SelectionChangedEventArgs e)
+        {
+            if (ThemeRadioButtons.SelectedIndex < 0) return;
+            var pref = (AppThemePreference)ThemeRadioButtons.SelectedIndex;
+            AppThemeService.Save(pref);
+            // Apply the theme immediately. The root
+            // visual is the MainWindow's content; we
+            // look it up by walking the visual tree
+            // from the page's XamlRoot.
+            if (XamlRoot?.Content is FrameworkElement root)
+            {
+                root.RequestedTheme = AppThemeService.ToElementTheme(pref);
+            }
         }
     }
 }

@@ -29,15 +29,11 @@ using Microsoft.UI.Dispatching;
 
 namespace BitNet.Desktop.Helpers;
 
-public enum AutoLockTimeout
-{
-    Never = 0,
-    OneMinute = 60,
-    FiveMinutes = 300,
-    FifteenMinutes = 900,
-    OneHour = 3600,
-    FourHours = 14400,
-}
+// `AutoLockTimeout` enum is defined in
+// `AutoLockTimeout.cs` so the test project (and any
+// future cross-platform consumer) can reference it
+// without pulling in the WinUI 3 dependencies that
+// `AutoLockService` requires.
 
 /// <summary>
 /// Singleton service that fires `AutoLock` after an idle

@@ -2,12 +2,19 @@
     x:Class="BitNet.Desktop.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:BitNet.Desktop">
+    xmlns:local="using:BitNet.Desktop"
+    xmlns:helpers="using:BitNet.Desktop.Helpers">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- Shared value converters. The
+                 BoolToVisibilityConverter is used by
+                 the VaultPage's DataTemplate to show
+                 the favourite star only for entries
+                 the user has marked as favourites. -->
+            <helpers:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -88,21 +88,20 @@ namespace BitNet.Desktop.Views
             // non-default kind, use EntryTypeIcons for
             // a consistent glyph. Otherwise the URL
             // heuristic is a reasonable fallback.
-            if (!string.IsNullOrEmpty(entry.Kind)
-                && !string.Equals(entry.Kind, "login", StringComparison.OrdinalIgnoreCase))
+            var kind = EntryKindExtensions.ParseKind(entry.Kind);
+            if (kind != EntryKind.Login)
             {
-                var kind = entry.Kind.ToLowerInvariant() switch
-                {
-                    "card" or "creditcard" or "credit_card" => EntryKind.CreditCard,
-                    "note" or "securenote" or "secure_note" => EntryKind.SecureNote,
-                    "identity" => EntryKind.Identity,
-                    "ssh" or "sshkey" or "ssh_key" => EntryKind.SshKey,
-                    "wifi" => EntryKind.Wifi,
-                    _ => EntryKind.Login,
-                };
                 return EntryTypeIcons.Glyph(kind);
             }
-            return GetIconForUrl(entry.Url);
+            // Login OR unknown kind: fall back to the
+            // URL-based heuristic for backward
+            // compatibility with v0.1 entries that
+            // don't have a `kind` field.
+            if (string.IsNullOrEmpty(entry.Kind))
+            {
+                return GetIconForUrl(entry.Url);
+            }
+            return EntryTypeIcons.Glyph(EntryKind.Login);
         }
 
         private static string GetIconForUrl(string url)
@@ -150,15 +149,34 @@ namespace BitNet.Desktop.Views
 
         private static bool MatchesKind(VaultEntry entry, string filter)
         {
-            var k = (entry.Kind ?? "login").ToLowerInvariant();
+            // The ComboBox tag is the kind identifier
+            // string ("login", "card", "identity",
+            // "note", "ssh", "all", "favorites"). We
+            // parse the entry's kind via the shared
+            // extension method so the filter logic
+            // stays in lock-step with the icon
+            // resolution and the Rust core's `kind`
+            // JSON field. "favorites" is orthogonal
+            // to the kind — it only looks at the
+            // entry's `Favorite` flag.
+            if (filter == "favorites")
+            {
+                return entry.Favorite;
+            }
+            var entryKind = EntryKindExtensions.ParseKind(entry.Kind);
             return filter switch
             {
                 "all" => true,
-                "login" => k == "login" || k == "ssh" || k == "wifi",
-                "card" => k == "card" || k == "creditcard" || k == "credit_card",
-                "identity" => k == "identity",
-                "note" => k == "note" || k == "securenote" || k == "secure_note",
-                "ssh" => k == "ssh" || k == "sshkey" || k == "ssh_key",
+                // Bitwarden convention: the "Logins"
+                // tab groups together all network
+                // credentials (login + ssh + wifi).
+                "login" => entryKind == EntryKind.Login
+                            || entryKind == EntryKind.SshKey
+                            || entryKind == EntryKind.Wifi,
+                "card" => entryKind == EntryKind.CreditCard,
+                "identity" => entryKind == EntryKind.Identity,
+                "note" => entryKind == EntryKind.SecureNote,
+                "ssh" => entryKind == EntryKind.SshKey,
                 _ => true,
             };
         }
@@ -381,6 +399,17 @@ namespace BitNet.Desktop.Views
         /// </summary>
         [System.Text.Json.Serialization.JsonPropertyName("kind")]
         public string Kind { get; set; } = "login";
+        /// <summary>
+        /// Whether the user has marked this entry as
+        /// a favourite. The Rust core may emit
+        /// `favorite` (snake_case) or `is_favorite`;
+        /// we accept both via the `FavoriteConverter`
+        /// shim. Defaults to false so v0.1 entries
+        /// (which do not serialise this field) are
+        /// simply non-favourites.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonConverter(typeof(FavoriteJsonConverter))]
+        public bool Favorite { get; set; }
         public string IconGlyph { get; set; } = "\uE8D7";
     }
 }

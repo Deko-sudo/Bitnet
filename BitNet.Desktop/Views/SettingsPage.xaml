@@ -102,10 +102,12 @@
                     </TextBlock>
                     
                     <RadioButtons x:Name="ThemeRadioButtons"
-                                  SelectedIndex="0">
-                        <RadioButton Content="System default"/>
-                        <RadioButton Content="Light"/>
-                        <RadioButton Content="Dark"/>
+                                  Header="Appearance"
+                                  SelectedIndex="0"
+                                  SelectionChanged="ThemeRadioButtons_SelectionChanged">
+                        <x:String>SystemDefault</x:String>
+                        <x:String>Light</x:String>
+                        <x:String>Dark</x:String>
                     </RadioButtons>
                 </StackPanel>
             </Grid>
