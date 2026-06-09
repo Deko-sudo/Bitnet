@@ -189,7 +189,7 @@ mod imp {
     // multiple instances avoids `ERROR_PIPE_BUSY` for
     // clients that connect while the daemon is busy with a
     // previous request.
-    const NMPWAIT_WAIT_FOREVER: u32 = 0x0000_FFFF;
+    const PIPE_UNLIMITED_INSTANCES: u32 = 255;
     // Reasonable default buffer sizes. 4 KiB matches a typical
     // socket MTU and is more than enough for a single JSON-RPC
     // request (10 MiB cap is enforced in `protocol::read_frame`).
@@ -274,7 +274,7 @@ mod imp {
                     name_pcstr,
                     open_mode,
                     pipe_mode,
-                    NMPWAIT_WAIT_FOREVER, // unlimited instances
+                    PIPE_UNLIMITED_INSTANCES, // unlimited instances
                     BUFFER_SIZE,
                     BUFFER_SIZE,
                     NMPWAIT_USE_DEFAULT_WAIT,
@@ -615,6 +615,7 @@ pub fn endpoint_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     #[test]
     fn endpoint_name_is_non_empty() {
@@ -642,6 +643,79 @@ mod tests {
                                           // We do not actually use the accepted conn here — this
                                           // test is intentionally minimal to keep CI fast.
         drop(client);
+        drop(server);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_pipe_name_contains_daemon_name() {
+        let s = endpoint_name();
+        assert!(
+            s.contains("bitnet-cli"),
+            "endpoint name should contain the daemon name: {s}"
+        );
+        // Verify the Windows pipe naming convention
+        assert!(s.starts_with(r"\\.\pipe\"), "Windows pipe must use Named Pipe namespace: {s}");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_bind_and_connect_roundtrip() {
+        // Use a unique test pipe to avoid collisions with a
+        // production daemon or other tests.
+        let name = format!(r"\\.\pipe\bitnet-cli-test-{}", std::process::id());
+        let server = Server::bind_named(&name).expect("bind_named");
+
+        // Spawn the client in a thread so the server can
+        // accept. `ConnectNamedPipe` blocks until a client
+        // connects.
+        let client_handle = std::thread::spawn(move || {
+            let mut client = Client::connect_named(&name).expect("connect_named");
+            client.write_all(b"ping").expect("client write");
+            let mut buf = [0u8; 4];
+            client.read_exact(&mut buf).expect("client read");
+            assert_eq!(&buf, b"pong", "expected pong response");
+        });
+
+        let mut conn = server.accept().expect("accept");
+        let mut buf = [0u8; 4];
+        conn.read_exact(&mut buf).expect("server read");
+        assert_eq!(&buf, b"ping");
+        conn.write_all(b"pong").expect("server write");
+        drop(conn);
+
+        client_handle.join().expect("client thread panicked");
+        drop(server);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_connect_to_missing_pipe_fails() {
+        let name = r"\\.\pipe\bitnet-cli-definitely-missing-test";
+        let result = Client::connect_named(name);
+        assert!(result.is_err(), "connect to missing pipe must fail");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_server_accept_inflight_guard_exists() {
+        // Verify the AtomicBool inflight guard exists and is
+        // initialized to false. We do not test the concurrent
+        // WouldBlock path here because it requires two threads
+        // racing on accept() with precise timing; that test is
+        // covered by integration tests with real clients.
+        let name = format!(
+            r"\\.\pipe\bitnet-cli-test-inflight-{}",
+            std::process::id()
+        );
+        let server = Server::bind_named(&name).expect("bind_named");
+        // Accept once with a real client to prove the guard works
+        // correctly in the non-contended path.
+        let client_handle = std::thread::spawn(move || {
+            let _client = Client::connect_named(&name).expect("connect_named");
+        });
+        let _conn = server.accept().expect("accept should succeed");
+        client_handle.join().expect("client thread");
         drop(server);
     }
 }

@@ -2,11 +2,20 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 fn find_native_host_exe() -> Option<std::path::PathBuf> {
-    // Try target directory relative to manifest
+    // 1. CARGO_TARGET_DIR env var (set externally, e.g. CI or
+    //    when target is moved to avoid file-lock conflicts).
+    if let Ok(td) = std::env::var("CARGO_TARGET_DIR") {
+        let exe = std::path::Path::new(&td).join("debug").join("bitnet-native-host.exe");
+        if exe.exists() {
+            return Some(exe);
+        }
+    }
+
+    // 2. Default target directory relative to manifest.
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
     let target_dir = std::path::Path::new(&manifest_dir)
-        .join("..")
-        .join("..")
+        .ancestors()
+        .nth(2)?
         .join("target")
         .join("debug");
     let exe = target_dir.join("bitnet-native-host.exe");
@@ -14,7 +23,7 @@ fn find_native_host_exe() -> Option<std::path::PathBuf> {
         return Some(exe);
     }
 
-    // Fallback: target/debug from current exe
+    // 3. Fallback: target/debug from current exe location.
     let exe2 = std::env::current_exe()
         .ok()?
         .ancestors()
