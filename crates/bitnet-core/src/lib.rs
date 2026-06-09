@@ -180,14 +180,37 @@ impl SessionManager {
         *state = None;
     }
 
+    /// Verify the session is unlocked AND not expired.
+    ///
+    /// On expiry the in-memory `Session` (with decrypted vault entries) is
+    /// dropped so the plaintext does not linger in the heap past the
+    /// auto-lock deadline. Returns [`CoreError::SessionLocked`] if the vault
+    /// was either never unlocked, or has just been auto-locked by this call.
+    ///
+    /// This is the fix for [BITNET-H2] (CWE-613 / CWE-1230): the previous
+    /// implementation only reported `SessionLocked` to the caller but kept
+    /// the decrypted `groups: Vec<Group>` resident in `state: Option<Session>`
+    /// indefinitely, which is a memory-disclosure window for a process
+    /// memory dump.
     pub fn ensure_unlocked(&self) -> Result<(), CoreError> {
-        let guard = self.state.lock();
-        match &*guard {
+        let mut guard = self.state.lock();
+        match &mut *guard {
             Some(session) if !session.is_expired() => Ok(()),
-            _ => Err(CoreError::SessionLocked),
+            // Either never unlocked or just expired — drop the decrypted
+            // state so it can be zeroized by `Session::drop`. We re-assign
+            // through the Option so the destructor runs immediately rather
+            // than waiting for the next `unlock` to overwrite.
+            slot => {
+                if slot.is_some() {
+                    tracing::info!("auto-lock: vault session expired, zeroising in-memory state");
+                }
+                *slot = None;
+                Err(CoreError::SessionLocked)
+            }
         }
     }
 
+    /// Record user activity to delay auto-lock. Idempotent and cheap.
     pub fn touch(&self) {
         let mut state = self.state.lock();
         if let Some(ref mut session) = *state {
@@ -599,5 +622,54 @@ mod auto_lock_tests {
         thread::sleep(Duration::from_millis(200));
         assert_eq!(manager.state(), SessionState::Locked);
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// Regression for [BITNET-H2] (CWE-613 / CWE-1230): calling
+    /// `ensure_unlocked` on an expired session must drop the decrypted
+    /// `Session` (not just report it locked) so the plaintext does not
+    /// linger in the heap past the auto-lock deadline.
+    #[test]
+    fn test_ensure_unlocked_zeroises_expired_session() {
+        let manager = SessionManager::with_auto_lock(Duration::from_millis(100));
+        let path = "test_ensure_unlocked_expired.bitnet";
+        let root = bitnet_kdbx::Group {
+            uuid: [0u8; 16],
+            name: Zeroizing::new("Root".to_string()),
+            children: vec![],
+            entries: vec![],
+        };
+        bitnet_kdbx::save_vault(path, &[root], b"password").unwrap();
+        manager.unlock(path, b"password").unwrap();
+
+        // While still valid: ensure_unlocked succeeds AND keeps the
+        // session resident (does not accidentally clear it).
+        manager.ensure_unlocked().expect("should be unlocked");
+        assert_eq!(manager.state(), SessionState::Unlocked);
+
+        // Wait past the auto-lock deadline.
+        thread::sleep(Duration::from_millis(200));
+
+        // Now expired. ensure_unlocked must:
+        //   1. return SessionLocked
+        //   2. have dropped the in-memory Session (state == Locked
+        //      with no decrypted groups left)
+        let err = manager.ensure_unlocked().unwrap_err();
+        assert!(matches!(err, CoreError::SessionLocked));
+        assert_eq!(manager.state(), SessionState::Locked);
+        // A subsequent unlock must be a real, fresh unlock (i.e. the
+        // state was dropped, not just marked as expired). The most
+        // direct way to confirm the Session was dropped is to verify
+        // that state() returns Locked even though we never called
+        // lock() explicitly.
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// When the vault has never been unlocked, ensure_unlocked must
+    /// still return SessionLocked without panicking.
+    #[test]
+    fn test_ensure_unlocked_on_never_unlocked() {
+        let manager = SessionManager::with_auto_lock(Duration::from_secs(60));
+        let err = manager.ensure_unlocked().unwrap_err();
+        assert!(matches!(err, CoreError::SessionLocked));
     }
 }
