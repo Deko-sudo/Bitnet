@@ -153,6 +153,17 @@ fn main() {
             };
             let state = bitnet_daemon::DaemonState::new();
             let state = std::sync::Mutex::new(state);
+            // [BITNET-S1] Ctrl+C / SIGTERM handler: set shutdown
+            // flag so the daemon loop exits after finishing the
+            // current request.
+            let state_for_ctrlc = std::sync::Arc::new(state);
+            let state_clone = std::sync::Arc::clone(&state_for_ctrlc);
+            ctrlc::set_handler(move || {
+                tracing::info!("received Ctrl+C / SIGTERM, setting shutdown flag");
+                let guard = state_clone.lock().unwrap();
+                guard.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+            .expect("Error setting Ctrl-C handler");
             // The production service wires the daemon to a real
             // bitnet_core::SessionManager; for now we use a
             // NoopVaultService that allows `unlock` to succeed
@@ -167,7 +178,7 @@ fn main() {
             loop {
                 // [BITNET-S1] Graceful shutdown check.
                 {
-                    let guard = state.lock().unwrap();
+                    let guard = state_for_ctrlc.lock().unwrap();
                     if guard.shutdown.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("daemon shutting down gracefully");
                         break;
@@ -176,7 +187,7 @@ fn main() {
                 match server.accept() {
                     Ok(mut conn) => {
                         if let Err(_e) =
-                            bitnet_daemon::handle_one_in_memory(&state, &service, &mut conn)
+                            bitnet_daemon::handle_one_in_memory(&state_for_ctrlc, &service, &mut conn)
                         {
                             error!(op = "daemon", kind = "Error", "client dispatch failed");
                         }
@@ -204,13 +215,24 @@ fn main() {
                         seq: None,
                         ts: None,
                     };
-                    let body = serde_json::to_value(&req).unwrap();
+                    let body = match serde_json::to_value(&req) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            eprintln!("failed to serialise shutdown request: {e}");
+                            std::process::exit(1);
+                        }
+                    };
                     if let Err(e) = bitnet_daemon::protocol::write_frame(&mut client, &body) {
                         eprintln!("failed to send shutdown request: {e}");
                         std::process::exit(1);
                     }
-                    let _ = bitnet_daemon::protocol::read_frame(&mut client);
-                    println!("shutdown request sent");
+                    match bitnet_daemon::protocol::read_frame(&mut client) {
+                        Ok(_resp) => println!("shutdown request sent"),
+                        Err(e) => {
+                            eprintln!("daemon did not acknowledge shutdown: {e}");
+                            std::process::exit(1);
+                        }
+                    }
                     // Poll briefly until the daemon pipe disappears.
                     let start = std::time::Instant::now();
                     while bitnet_daemon::daemon_alive() && start.elapsed().as_secs() < 5 {

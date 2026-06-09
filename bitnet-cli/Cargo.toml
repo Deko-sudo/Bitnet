@@ -19,6 +19,7 @@ bitnet-daemon = { workspace = true }
 clap = { workspace = true }
 rpassword = { workspace = true }
 serde_json = { workspace = true }
+ctrlc = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
