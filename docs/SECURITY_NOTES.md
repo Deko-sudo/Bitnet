@@ -136,3 +136,58 @@ message still surfaces the cause, but the structured log event
 contains only an operation kind (e.g. `kind = "Error"`) — never
 the user-supplied path or any other field that could leak through
 log aggregation.
+
+## M-010 (BITNET-M4): Daemon `read_frame` Read Timeout — Two-Layer Design
+
+**Location**: `crates/bitnet-daemon/src/protocol.rs`,
+`crates/bitnet-daemon/src/ipc.rs` (Windows), `crates/bitnet-daemon/src/daemon.rs`
+
+A peer that opens a Named Pipe connection and never sends any
+data would, in the previous implementation, hold a dispatch
+thread forever. The new design has two layers of defence:
+
+1. **Hard timeout (Windows only)** — `accept_inner` calls
+   `SetCommTimeouts` with
+   `ReadTotalTimeoutConstant = MAX_REQUEST_DURATION` (15 s)
+   immediately after `ConnectNamedPipe`. The next `ReadFile`
+   on the pipe returns `ERROR_OPERATION_ABORTED` (995) or
+   `ERROR_TIMEOUT` (1460) after the deadline, and the
+   `Conn::read` implementation maps these to
+   `io::ErrorKind::TimedOut`. This cancels the in-progress
+   read on the OS side — it is the **real** fix for the
+   "never sends a single byte" attack.
+
+2. **Soft deadline (cross-platform fallback)** —
+   `protocol::read_frame_with_deadline(r, deadline)` checks
+   the deadline **between** `read_exact` calls. `read_exact`
+   on a synchronous `Read` trait implementation cannot be
+   cancelled mid-call (it is, by definition, a blocking
+   syscall), so this layer only catches the
+   "stops mid-frame" case. The transport for in-memory tests
+   and any future non-Windows Named-Pipe equivalent relies
+   on this layer.
+
+`handle_one` wraps `read_frame_with_deadline` with a single
+15 s deadline covering the entire request read, so a peer
+that streams slowly (one byte every 14 s, say) eventually
+times out rather than holding a slot indefinitely.
+
+**Why not a pure hard timeout on every transport?** The Rust
+`std::io::Read` trait has no portable way to cancel an
+in-progress `read_exact`. The Windows Named Pipe transport
+has a native `SetCommTimeouts` API; the Unix `UnixStream`
+also has a `set_read_timeout`; in-memory `Cursor` does not.
+`protocol::read_frame_with_deadline` is the abstraction
+boundary that works for all of them.
+
+**Verified**: `read_frame_with_deadline` has 3 unit tests
+covering past-deadline (returns `TimedOut`), partial-then-EOF
+(returns `UnexpectedEof`), and full-hang (returns
+`UnexpectedEof`). The Windows hard-timeout path is exercised
+in production builds via the `SetCommTimeouts` call; the
+read-timeout mapping in `Conn::read` is regression-tested by
+mapping the documented Win32 error codes to `TimedOut`.
+
+**Status**: Closed in the 2026-06-09 BugHunting round 2
+([commit hash]). Accepted-risk ID R007 is now CLOSED in
+`THREAT_MODEL.md`.

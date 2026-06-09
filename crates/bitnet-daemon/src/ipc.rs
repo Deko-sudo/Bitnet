@@ -154,6 +154,7 @@ mod imp {
     use std::io::{Read, Write};
 
     use windows::core::PCSTR;
+    use windows::Win32::Devices::Communication::{SetCommTimeouts, COMMTIMEOUTS};
     use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::Storage::FileSystem::{
         CreateFileA, ReadFile, WriteFile, FILE_CREATION_DISPOSITION, FILE_FLAGS_AND_ATTRIBUTES,
@@ -163,6 +164,7 @@ mod imp {
         ConnectNamedPipe, CreateNamedPipeA, DisconnectNamedPipe, NAMED_PIPE_MODE,
         PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
     };
+    use windows::Win32::System::SystemServices::MAXDWORD;
 
     pub const PIPE_NAME: &str = r"\\.\pipe\bitnet-cli";
     /// Prefix used by integration tests so each test can
@@ -351,6 +353,46 @@ mod imp {
                     }
                 })?;
 
+            // [BITNET-M4] CWE-400: install a hard read-timeout
+            // on the newly accepted pipe. The classic Named
+            // Pipe default is "wait forever", which means a
+            // peer that opens a connection and never sends
+            // any data ties up a dispatch thread indefinitely.
+            // SetCommTimeouts is the Win32 API for this; it is
+            // documented for all "communications devices",
+            // and Named Pipes are classified as such.
+            //
+            // The configuration is:
+            //   - ReadTotalTimeoutConstant = MAX_REQUEST_DURATION
+            //     (in ms). After this many milliseconds elapse
+            //     *between* delivered bytes (or before the very
+            //     first byte), the next ReadFile returns
+            //     ERROR_OPERATION_ABORTED and our `read()`
+            //     implementation returns TimedOut.
+            //   - ReadIntervalTimeout = MAXDWORD disables the
+            //     per-byte-gap timeout (so the only cap is the
+            //     total-constant).
+            //   - WriteTotalTimeout* = 0 (writes do not block).
+            // If SetCommTimeouts fails for any reason we
+            // silently continue without the timeout — the
+            // soft deadline check in
+            // `protocol::read_frame_with_deadline` is the
+            // fallback layer.
+            // Saturate to u32::MAX rather than wrap on systems
+            // with a > 4 billion ms constant. Today we cap at
+            // 15 s (well under u32::MAX), so this is just
+            // defensive.
+            let read_timeout_ms = u32::try_from(crate::protocol::MAX_REQUEST_DURATION.as_millis())
+                .unwrap_or(u32::MAX);
+            let timeouts = COMMTIMEOUTS {
+                ReadIntervalTimeout: MAXDWORD,
+                ReadTotalTimeoutMultiplier: 0,
+                ReadTotalTimeoutConstant: read_timeout_ms,
+                WriteTotalTimeoutMultiplier: 0,
+                WriteTotalTimeoutConstant: 0,
+            };
+            let _ = unsafe { SetCommTimeouts(self.handle, &timeouts) };
+
             Ok(Conn {
                 handle: self.handle,
             })
@@ -384,7 +426,23 @@ mod imp {
             }
             let mut bytes_read: u32 = 0;
             let ok = unsafe { ReadFile(self.handle, Some(buf), Some(&mut bytes_read), None) };
-            ok.map_err(win_err)?;
+            if let Err(e) = ok {
+                // [BITNET-M4] Map `ERROR_OPERATION_ABORTED`
+                // (995) and `ERROR_TIMEOUT` (1460) to
+                // `io::ErrorKind::TimedOut` so the dispatch
+                // loop and the soft-deadline path both treat a
+                // `SetCommTimeouts` expiry uniformly.
+                const ERROR_OPERATION_ABORTED: i32 = 995;
+                const ERROR_TIMEOUT_WIN32: i32 = 1460;
+                let raw = e.code().0;
+                if raw == ERROR_OPERATION_ABORTED || raw == ERROR_TIMEOUT_WIN32 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "pipe read timed out",
+                    ));
+                }
+                return Err(win_err(e));
+            }
             Ok(bytes_read as usize)
         }
     }

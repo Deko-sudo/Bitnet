@@ -436,7 +436,15 @@ pub fn handle_one<R: Read, W: Write, S: VaultService>(
     r: &mut R,
     w: &mut W,
 ) -> std::io::Result<()> {
-    let request_value = protocol::read_frame(r)?;
+    // [BITNET-M4] CWE-400: bound the entire request-handling
+    // time with a deadline. The underlying transport may
+    // already have a per-read timeout installed (Windows
+    // Named Pipe via `SetCommTimeouts`); the soft deadline
+    // here is the cross-platform fallback for in-memory
+    // test transports and any future non-Windows Named-Pipe
+    // equivalent.
+    let deadline = std::time::Instant::now() + protocol::MAX_REQUEST_DURATION;
+    let request_value = protocol::read_frame_with_deadline(r, Some(deadline))?;
     let request: Request = serde_json::from_value(request_value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let response = dispatch(state, service, request);
